@@ -5,7 +5,7 @@ All notable changes to the UPnPCast library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.3.0] - 2026-09-02
 
 ### ✨ Added
 - **Protocol-level integration tests**: an in-process fake DLNA renderer (local HTTP + SOAP endpoints) drives the full control flow — device description parsing over HTTP, AVTransport/RenderingControl actions, seek/volume request building, response parsing, `playMediaDirect` sequencing, device-error handling and cache behavior (fetch, cache hit, interpolation only while `PLAYING`); the `DLNACast` facade is covered end to end (neutral defaults before `init`, lifecycle with a WifiManager-less context, fast-failure paths). Suite grows to 92 tests
