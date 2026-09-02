@@ -1,664 +1,245 @@
-# 🎯 UPnPCast 最佳实践指南
+# 最佳实践
 
-## 📋 目录
-- [异步回调处理](#异步回调处理)
-- [设备管理策略](#设备管理策略)
-- [错误处理机制](#错误处理机制)
-- [性能优化建议](#性能优化建议)
-- [生产环境配置](#生产环境配置)
+本文覆盖 UPnPCast 在真实应用中的推荐用法：生命周期、轮询、状态管理、错误处理与设备选择。所有示例基于 v1.3.0 的协程 API。
 
-## 🔄 异步回调处理
+## 目录
 
-### 1. 改进的设备发现API设计
+- [生命周期管理](#生命周期管理)
+- [设备发现与选择](#设备发现与选择)
+- [进度轮询](#进度轮询)
+- [状态同步](#状态同步)
+- [错误处理](#错误处理)
+- [性能与稳定性](#性能与稳定性)
 
-**❌ 当前的分批返回问题：**
+## 生命周期管理
+
+### init/cleanup 与宿主对齐
+
+`DLNACast.init()` 创建内部引擎（协程作用域、SSDP 发现、控制器与缓存），`cleanup()` 全部释放。二者应与承载 UI 的生命周期对齐：
+
 ```kotlin
-// 现有API - 分批返回，体验不佳
-DLNACast.search { devices ->
-    // 这个回调可能被调用多次
-    // 每次返回部分设备，UI频繁刷新
-    updateUI(devices) // 用户看到设备列表不断跳动
-}
-```
+class MainActivity : AppCompatActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        DLNACast.init(this)
+    }
 
-**✅ 建议的一次性返回设计：**
-```kotlin
-// 改进API - 一次性返回完整设备列表
-class DeviceSearchOptions {
-    var timeout: Long = 10000        // 搜索总超时时间
-    var minWaitTime: Long = 3000     // 最少等待时间（确保发现大部分设备）
-    var maxDeviceCount: Int = 10     // 发现足够设备数后可提前结束
-    var enableProgress: Boolean = false // 是否需要进度回调
-}
-
-// 一次性返回完整结果
-DLNACast.searchAll(options = DeviceSearchOptions()) { result ->
-    when (result) {
-        is SearchResult.Success -> {
-            // 一次性获得所有设备，UI只更新一次
-            updateDeviceList(result.devices)
-            showMessage("发现 ${result.devices.size} 个设备")
-        }
-        is SearchResult.Timeout -> {
-            // 超时但可能有部分设备
-            updateDeviceList(result.partialDevices)
-            showMessage("搜索超时，发现 ${result.partialDevices.size} 个设备")
-        }
-        is SearchResult.Error -> {
-            showError("搜索失败: ${result.message}")
-        }
-    }
-}
-
-// 如果需要实时进度，提供专门的进度回调
-DLNACast.searchWithProgress(
-    options = DeviceSearchOptions(enableProgress = true),
-    onProgress = { currentDevices, elapsedTime ->
-        // 可选的进度更新，用于显示搜索状态
-        showProgress("已发现 ${currentDevices.size} 个设备 (${elapsedTime}ms)")
-    },
-    onComplete = { finalDevices ->
-        // 最终结果，UI做最终更新
-        updateDeviceList(finalDevices)
-    }
-)
-```
-
-### 2. 智能设备搜索策略
-```kotlin
-class SmartDeviceDiscovery {
-    
-    // 智能搜索 - 根据环境自动调整策略
-    suspend fun discoverDevices(): SearchResult {
-        return withContext(Dispatchers.IO) {
-            val searchConfig = determineSearchStrategy()
-            
-            val foundDevices = mutableSetOf<Device>()
-            val startTime = System.currentTimeMillis()
-            
-            // 多轮搜索策略
-            repeat(searchConfig.rounds) { round ->
-                val roundDevices = performSingleSearch(searchConfig.roundTimeout)
-                foundDevices.addAll(roundDevices)
-                
-                // 检查是否满足提前结束条件
-                if (shouldEarlyExit(foundDevices, startTime, round)) {
-                    break
-                }
-                
-                // 短暂间隔后进行下一轮
-                delay(searchConfig.roundInterval)
-            }
-            
-            return@withContext SearchResult.Success(foundDevices.toList())
-        }
-    }
-    
-    private fun determineSearchStrategy(): SearchConfig {
-        return when {
-            isHighEndDevice() -> SearchConfig(
-                rounds = 2, 
-                roundTimeout = 4000, 
-                roundInterval = 1000
-            )
-            isLowEndDevice() -> SearchConfig(
-                rounds = 1, 
-                roundTimeout = 8000, 
-                roundInterval = 0
-            )
-            else -> SearchConfig(
-                rounds = 3, 
-                roundTimeout = 3000, 
-                roundInterval = 500
-            )
-        }
-    }
-    
-    private fun shouldEarlyExit(
-        devices: Set<Device>, 
-        startTime: Long, 
-        currentRound: Int
-    ): Boolean {
-        val elapsed = System.currentTimeMillis() - startTime
-        return when {
-            devices.size >= 5 && elapsed > 3000 -> true  // 发现足够设备
-            devices.any { it.isTV } && elapsed > 2000 -> true  // 发现电视设备
-            else -> false
-        }
-    }
-}
-
-data class SearchConfig(
-    val rounds: Int,           // 搜索轮数
-    val roundTimeout: Long,    // 每轮超时时间
-    val roundInterval: Long    // 轮次间隔
-)
-
-sealed class SearchResult {
-    data class Success(val devices: List<Device>) : SearchResult()
-    data class Timeout(val partialDevices: List<Device>) : SearchResult()
-    data class Error(val message: String) : SearchResult()
-}
-```
-
-### 3. 优雅的协程封装
-```kotlin
-class DLNACastHelper {
-    
-    // 协程版本 - 一次性返回结果
-    suspend fun searchDevices(
-        timeout: Long = 10000,
-        minWaitTime: Long = 3000
-    ): List<Device> {
-        return suspendCoroutine { continuation ->
-            val foundDevices = mutableSetOf<Device>()
-            val startTime = System.currentTimeMillis()
-            var searchCompleted = false
-            
-            // 启动搜索
-            fun startSearch() {
-                DLNACast.search(2000) { newDevices ->
-                    if (searchCompleted) return@search
-                    
-                    foundDevices.addAll(newDevices)
-                    val elapsed = System.currentTimeMillis() - startTime
-                    
-                    // 检查完成条件
-                    when {
-                        elapsed >= timeout -> {
-                            // 超时完成
-                            searchCompleted = true
-                            continuation.resume(foundDevices.toList())
-                        }
-                        elapsed >= minWaitTime && foundDevices.isNotEmpty() -> {
-                            // 已等待足够时间且有设备，再等待一轮确保完整
-                            Handler().postDelayed({
-                                if (!searchCompleted) {
-                                    searchCompleted = true
-                                    continuation.resume(foundDevices.toList())
-                                }
-                            }, 2000)
-                        }
-                        else -> {
-                            // 继续搜索
-                            Handler().postDelayed({ startSearch() }, 1000)
-                        }
-                    }
-                }
-            }
-            
-            startSearch()
-        }
-    }
-    
-    // 带进度的搜索
-    suspend fun searchWithProgress(
-        onProgress: (devices: List<Device>, elapsedTime: Long) -> Unit
-    ): List<Device> {
-        return suspendCoroutine { continuation ->
-            val foundDevices = mutableSetOf<Device>()
-            val startTime = System.currentTimeMillis()
-            
-            fun searchRound() {
-                DLNACast.search(3000) { newDevices ->
-                    foundDevices.addAll(newDevices)
-                    val elapsed = System.currentTimeMillis() - startTime
-                    
-                    // 报告进度
-                    onProgress(foundDevices.toList(), elapsed)
-                    
-                    // 检查是否继续
-                    if (elapsed < 10000) {
-                        Handler().postDelayed({ searchRound() }, 1000)
-                    } else {
-                        continuation.resume(foundDevices.toList())
-                    }
-                }
-            }
-            
-            searchRound()
-        }
-    }
-}
-```
-
-### 4. 实际使用示例
-```kotlin
-class CastActivity : AppCompatActivity() {
-    
-    private val castHelper = DLNACastHelper()
-    
-    // 方式1: 简单一次性搜索
-    private fun searchDevicesSimple() {
-        lifecycleScope.launch {
-            showLoading("正在搜索设备...")
-            
-            try {
-                val devices = castHelper.searchDevices(
-                    timeout = 10000,
-                    minWaitTime = 3000
-                )
-                
-                hideLoading()
-                
-                if (devices.isNotEmpty()) {
-                    showDeviceList(devices)
-                    showMessage("发现 ${devices.size} 个设备")
-                } else {
-                    showMessage("未发现可用设备")
-                }
-                
-            } catch (e: Exception) {
-                hideLoading()
-                showError("搜索失败: ${e.message}")
-            }
-        }
-    }
-    
-    // 方式2: 带进度的搜索
-    private fun searchWithProgress() {
-        lifecycleScope.launch {
-            showProgressDialog("搜索中...")
-            
-            try {
-                val devices = castHelper.searchWithProgress { currentDevices, elapsed ->
-                    // 实时更新进度
-                    updateProgress("已发现 ${currentDevices.size} 个设备 (${elapsed}ms)")
-                }
-                
-                hideProgressDialog()
-                showDeviceList(devices)
-                
-            } catch (e: Exception) {
-                hideProgressDialog()
-                showError("搜索失败: ${e.message}")
-            }
-        }
-    }
-    
-    // 方式3: 智能搜索 - 自动选择最佳设备
-    private fun smartSearch() {
-        lifecycleScope.launch {
-            val devices = castHelper.searchDevices()
-            
-            val bestDevice = when {
-                devices.any { it.isTV } -> devices.first { it.isTV }
-                devices.isNotEmpty() -> devices.first()
-                else -> null
-            }
-            
-            bestDevice?.let { device ->
-                showMessage("已自动选择: ${device.name}")
-                castToDevice(device)
-            } ?: showMessage("未发现可用设备")
-        }
-    }
-}
-```
-
-## 📱 设备管理策略
-
-### 1. 智能设备缓存
-```kotlin
-class DeviceManager {
-    private val deviceCache = mutableMapOf<String, Device>()
-    private val deviceHistory = mutableListOf<String>()
-    
-    fun cacheDevices(devices: List<Device>) {
-        devices.forEach { device ->
-            deviceCache[device.id] = device
-            updateDeviceHistory(device.id)
-        }
-    }
-    
-    private fun updateDeviceHistory(deviceId: String) {
-        deviceHistory.removeAll { it == deviceId }
-        deviceHistory.add(0, deviceId)
-        
-        // 保持历史记录不超过10个
-        if (deviceHistory.size > 10) {
-            deviceHistory.removeLast()
-        }
-    }
-    
-    fun getPreferredDevice(): Device? {
-        // 优先返回最近使用的可用设备
-        for (deviceId in deviceHistory) {
-            deviceCache[deviceId]?.let { device ->
-                if (isDeviceAvailable(device)) {
-                    return device
-                }
-            }
-        }
-        return null
-    }
-    
-    private fun isDeviceAvailable(device: Device): Boolean {
-        // 这里可以添加设备可用性检查逻辑
-        return true
-    }
-}
-```
-
-### 2. 同步等待所有设备
-```kotlin
-class DeviceDiscovery {
-    fun waitForAllDevices(
-        maxWaitTime: Long = 15000,
-        minDeviceCount: Int = 1,
-        callback: (List<Device>) -> Unit
-    ) {
-        val foundDevices = mutableSetOf<Device>()
-        val startTime = System.currentTimeMillis()
-        
-        fun searchAndWait() {
-            DLNACast.search(5000) { devices ->
-                foundDevices.addAll(devices)
-                
-                val elapsed = System.currentTimeMillis() - startTime
-                
-                when {
-                    foundDevices.size >= minDeviceCount && elapsed > 3000 -> {
-                        // 找到足够设备且已等待3秒，返回结果
-                        callback(foundDevices.toList())
-                    }
-                    elapsed < maxWaitTime -> {
-                        // 继续搜索
-                        Handler().postDelayed({ searchAndWait() }, 2000)
-                    }
-                    else -> {
-                        // 超时，返回现有结果
-                        callback(foundDevices.toList())
-                    }
-                }
-            }
-        }
-        
-        searchAndWait()
-    }
-}
-```
-
-## 🛡️ 错误处理机制
-
-### 1. 统一错误处理
-```kotlin
-sealed class CastResult {
-    object Success : CastResult()
-    data class Error(val type: ErrorType, val message: String) : CastResult()
-}
-
-enum class ErrorType {
-    NETWORK_ERROR,
-    DEVICE_NOT_FOUND,
-    MEDIA_FORMAT_ERROR,
-    CONNECTION_TIMEOUT,
-    PERMISSION_DENIED
-}
-
-class CastManager {
-    fun cast(url: String, callback: (CastResult) -> Unit) {
-        try {
-            // 预检查
-            if (!isNetworkAvailable()) {
-                callback(CastResult.Error(ErrorType.NETWORK_ERROR, "网络不可用"))
-                return
-            }
-            
-            if (!isValidMediaUrl(url)) {
-                callback(CastResult.Error(ErrorType.MEDIA_FORMAT_ERROR, "不支持的媒体格式"))
-                return
-            }
-            
-            // 搜索设备
-            DLNACast.search(10000) { devices ->
-                if (devices.isEmpty()) {
-                    callback(CastResult.Error(ErrorType.DEVICE_NOT_FOUND, "未发现可用设备"))
-                    return@search
-                }
-                
-                // 执行投屏
-                DLNACast.cast(url) { success ->
-                    if (success) {
-                        callback(CastResult.Success)
-                    } else {
-                        callback(CastResult.Error(ErrorType.CONNECTION_TIMEOUT, "投屏连接超时"))
-                    }
-                }
-            }
-            
-        } catch (e: SecurityException) {
-            callback(CastResult.Error(ErrorType.PERMISSION_DENIED, "缺少必要权限"))
-        } catch (e: Exception) {
-            callback(CastResult.Error(ErrorType.NETWORK_ERROR, e.message ?: "未知错误"))
-        }
-    }
-    
-    private fun isNetworkAvailable(): Boolean {
-        // 网络检查逻辑
-        return true
-    }
-    
-    private fun isValidMediaUrl(url: String): Boolean {
-        // URL格式检查
-        return url.matches(Regex("^https?://.*\\.(mp4|mp3|jpg|jpeg|png)$"))
-    }
-}
-```
-
-### 2. 重试机制实现
-```kotlin
-class RetryableCast {
-    fun castWithRetry(
-        url: String,
-        maxRetries: Int = 3,
-        retryDelay: Long = 2000,
-        callback: (Boolean) -> Unit
-    ) {
-        var attempts = 0
-        
-        fun attemptCast() {
-            attempts++
-            
-            DLNACast.cast(url) { success ->
-                when {
-                    success -> {
-                        Log.d("Cast", "投屏成功，尝试次数: $attempts")
-                        callback(true)
-                    }
-                    attempts < maxRetries -> {
-                        Log.w("Cast", "投屏失败，重试中... ($attempts/$maxRetries)")
-                        Handler().postDelayed({ attemptCast() }, retryDelay)
-                    }
-                    else -> {
-                        Log.e("Cast", "投屏最终失败，已重试 $maxRetries 次")
-                        callback(false)
-                    }
-                }
-            }
-        }
-        
-        attemptCast()
-    }
-}
-```
-
-## ⚡ 性能优化建议
-
-### 1. 资源管理
-```kotlin
-class CastService : Service() {
-    private var isInitialized = false
-    
-    override fun onCreate() {
-        super.onCreate()
-        initializeCast()
-    }
-    
-    private fun initializeCast() {
-        if (!isInitialized) {
-            DLNACast.init(this)
-            isInitialized = true
-        }
-    }
-    
     override fun onDestroy() {
         super.onDestroy()
-        if (isInitialized) {
-            DLNACast.release()
-            isInitialized = false
-        }
+        DLNACast.cleanup()
     }
 }
 ```
 
-### 2. 批量操作优化
+要点：
+
+- `init()` 可安全重复调用——旧引擎会被先释放再重建，`cleanup()` → `init()` 循环不会泄漏
+- 传 `Activity` 即可，库内部只保留 `applicationContext`，不会持有 Activity 引用
+- 未初始化时查询类 API 返回中性默认值（`false` / `null` / `IDLE` / 空列表），`castLocalFile` 抛 `UPnPException.UnknownError`——无需自行判断初始化状态
+
+### 投屏会话用独立协程作用域
+
+不要把投屏控制塞进随 UI 销毁的作用域。用一个与"投屏会话"同生命周期的 `Job` 管理轮询：
+
 ```kotlin
-class BatchCastManager {
-    private val castQueue = mutableListOf<CastRequest>()
-    private var isProcessing = false
-    
-    data class CastRequest(
-        val device: Device,
-        val url: String,
-        val callback: (Boolean) -> Unit
-    )
-    
-    fun addCastRequest(device: Device, url: String, callback: (Boolean) -> Unit) {
-        castQueue.add(CastRequest(device, url, callback))
-        processQueue()
-    }
-    
-    private fun processQueue() {
-        if (isProcessing || castQueue.isEmpty()) return
-        
-        isProcessing = true
-        val request = castQueue.removeFirst()
-        
-        DLNACast.castToDevice(request.device, request.url) { success ->
-            request.callback(success)
-            
-            // 处理下一个请求
-            Handler().postDelayed({
-                isProcessing = false
-                processQueue()
-            }, 1000) // 间隔1秒避免过于频繁
+private var castSession: Job? = null
+
+private fun startCastMonitor() {
+    castSession?.cancel()
+    castSession = lifecycleScope.launch {
+        while (isActive) {
+            refreshUi()
+            delay(1000)
         }
     }
 }
+
+override fun onDestroy() {
+    castSession?.cancel()
+    DLNACast.cleanup()
+    super.onDestroy()
+}
 ```
 
-## 🏭 生产环境配置
+## 设备发现与选择
 
-### 1. 日志管理
+### 按特征挑选设备
+
 ```kotlin
-object CastLogger {
-    private const val TAG = "UPnPCast"
-    private var isDebugMode = BuildConfig.DEBUG
-    
-    fun enableDebug(enable: Boolean) {
-        isDebugMode = enable
-    }
-    
-    fun d(message: String) {
-        if (isDebugMode) {
-            Log.d(TAG, message)
-        }
-    }
-    
-    fun w(message: String, throwable: Throwable? = null) {
-        Log.w(TAG, message, throwable)
-    }
-    
-    fun e(message: String, throwable: Throwable? = null) {
-        Log.e(TAG, message, throwable)
-        // 生产环境可以上报错误到崩溃收集平台
-        if (!isDebugMode) {
-            // Crashlytics.recordException(throwable)
-        }
-    }
+suspend fun findTv(timeout: Long = 5000): DLNACast.Device? {
+    val devices = DLNACast.search(timeout)
+    return devices.firstOrNull { it.isTV }
+        ?: devices.maxByOrNull { it.name.length } // 兜底策略按业务定
 }
 ```
 
-### 2. 配置管理
+### 记住上次的设备
+
+用 `Device.id`（UDN，设备唯一且稳定）持久化用户选择，下次直连：
+
 ```kotlin
-object CastConfig {
-    // 默认搜索超时
-    var searchTimeout = 10000L
-    
-    // 默认连接超时
-    var connectionTimeout = 30000L
-    
-    // 是否启用设备缓存
-    var enableDeviceCache = true
-    
-    // 最大重试次数
-    var maxRetries = 3
-    
-    // 支持的媒体格式
-    val supportedFormats = listOf("mp4", "mp3", "jpg", "jpeg", "png")
-    
-    fun loadFromPreferences(context: Context) {
-        val prefs = context.getSharedPreferences("upnp_cast", Context.MODE_PRIVATE)
-        searchTimeout = prefs.getLong("search_timeout", searchTimeout)
-        connectionTimeout = prefs.getLong("connection_timeout", connectionTimeout)
-        enableDeviceCache = prefs.getBoolean("enable_cache", enableDeviceCache)
-        maxRetries = prefs.getInt("max_retries", maxRetries)
-    }
-}
+// 保存
+prefs.edit().putString("last_tv_id", device.id).apply()
+
+// 复用
+val lastId = prefs.getString("last_tv_id", null)
+val device = DLNACast.search().firstOrNull { it.id == lastId }
+    ?: DLNACast.search().firstOrNull { it.isTV } // 上次的设备不在线，回退
 ```
 
-### 3. 权限管理
+### 投屏失败自动重试
+
 ```kotlin
-class PermissionHelper(private val activity: Activity) {
-    companion object {
-        private const val REQUEST_CODE = 1001
-        
-        val REQUIRED_PERMISSIONS = arrayOf(
-            Manifest.permission.INTERNET,
-            Manifest.permission.ACCESS_NETWORK_STATE,
-            Manifest.permission.ACCESS_WIFI_STATE
-        )
+suspend fun castWithRetry(url: String, title: String, maxRetries: Int = 3): Boolean {
+    repeat(maxRetries) { attempt ->
+        if (DLNACast.cast(url, title)) return true
+        delay(2000L * (attempt + 1)) // 线性退避
     }
-    
-    fun checkAndRequestPermissions(callback: (Boolean) -> Unit) {
-        val missingPermissions = REQUIRED_PERMISSIONS.filter {
-            ContextCompat.checkSelfPermission(activity, it) != PackageManager.PERMISSION_GRANTED
+    return false
+}
+```
+
+## 进度轮询
+
+### 用 getProgress() 轮询 UI
+
+`getProgress()` 带短缓存与播放中插值，专为每秒级轮询设计，不会每秒都打网络请求：
+
+```kotlin
+lifecycleScope.launch {
+    while (isActive) {
+        DLNACast.getProgress()?.let { (currentMs, totalMs) ->
+            val percent = if (totalMs > 0) (currentMs * 100 / totalMs).toInt() else 0
+            seekBar.progress = percent
+            timeText.text = formatTime(currentMs)
         }
-        
-        if (missingPermissions.isEmpty()) {
-            callback(true)
-        } else {
-            ActivityCompat.requestPermissions(
-                activity,
-                missingPermissions.toTypedArray(),
-                REQUEST_CODE
-            )
-        }
-    }
-    
-    fun handlePermissionResult(
-        requestCode: Int,
-        permissions: Array<String>,
-        grantResults: IntArray,
-        callback: (Boolean) -> Unit
-    ) {
-        if (requestCode == REQUEST_CODE) {
-            val allGranted = grantResults.all { it == PackageManager.PERMISSION_GRANTED }
-            callback(allGranted)
-        }
+        delay(1000)
     }
 }
 ```
 
-## 🎯 总结
+### Seek 后强制刷新
 
-使用这些最佳实践可以显著提高UPnPCast库的稳定性和用户体验：
+seek 之后缓存里的旧位置可能还会被读一次，立即用实时接口修正：
 
-1. **异步处理** - 使用协程和合理的回调链管理
-2. **设备管理** - 智能缓存和设备选择策略  
-3. **错误处理** - 统一的错误类型和重试机制
-4. **性能优化** - 资源管理和批量操作优化
-5. **生产配置** - 完善的日志、配置和权限管理
+```kotlin
+seekBar.setOnTouchListener { _, event ->
+    if (event.action == MotionEvent.ACTION_UP) {
+        val targetMs = seekBar.progress.toLong() * 1000
+        lifecycleScope.launch {
+            DLNACast.seek(targetMs)
+            DLNACast.getProgressRealtime() // 立刻拉取新位置
+        }
+    }
+    false
+}
+```
 
-这样可以让你的应用更加稳定可靠，用户体验更好。 
+### 切换媒体后清缓存
+
+同一设备连续投屏不同视频时，旧进度缓存会污染新会话：
+
+```kotlin
+DLNACast.clearProgressCache()
+DLNACast.castToDevice(device, newUrl, newTitle)
+```
+
+## 状态同步
+
+### 区分"本地操作"与"远端操作"
+
+- 用户在你的 App 内暂停 → 调用 `pause()` 后本地即知结果
+- 用户用**电视遥控器**暂停 → 需要主动查询：
+
+```kotlin
+suspend fun syncRemoteState(): DLNACast.PlaybackState {
+    val live = DLNACast.getPlaybackState() // GetTransportInfo 实时查询
+    playPauseButton.isChecked = live == DLNACast.PlaybackState.PLAYING
+    return live
+}
+```
+
+推荐把它放进上一节的轮询循环里，每 1-2 秒对齐一次 UI 与设备真实状态。
+
+### 处理 STOPPED
+
+设备播放到结尾、或被遥控器停止时状态为 `STOPPED`。在此状态下释放 UI 或提示"播放结束"：
+
+```kotlin
+when (DLNACast.getPlaybackState()) {
+    DLNACast.PlaybackState.STOPPED -> showPlayNextSuggestion()
+    else -> {}
+}
+```
+
+## 错误处理
+
+### 网络投屏：布尔返回 + 异常兜底
+
+`cast` / `castToDevice` / 控制类方法返回 `Boolean` 表示设备是否接受，网络异常以 `false` 返回而不抛出——按需 try/catch：
+
+```kotlin
+lifecycleScope.launch {
+    try {
+        val ok = DLNACast.castToDevice(device, url, title)
+        if (!ok) showError("设备拒绝了投屏请求")
+    } catch (e: CancellationException) {
+        throw e // 协程取消必须继续传播
+    } catch (e: Exception) {
+        showError("投屏失败: ${e.message}")
+    }
+}
+```
+
+注意：`catch (e: Exception)` 前放行 `CancellationException`，否则会破坏协程取消语义。
+
+### 本地投屏：类型化异常
+
+`castLocalFile` 在失败源头抛出类型化异常，可精确分支：
+
+```kotlin
+try {
+    DLNACast.castLocalFile(filePath, device, title)
+} catch (e: UPnPException.FileError) {
+    requestStoragePermission() // 大概率是权限/路径问题
+} catch (e: UPnPException.NetworkError) {
+    checkWifi()
+} catch (e: UPnPException.DeviceError) {
+    showDeviceRejectedDialog()
+}
+```
+
+### 统一 UI 提示
+
+```kotlin
+fun Throwable.userMessage(): String = when (this) {
+    is UPnPException.FileError -> "文件不可读"
+    is UPnPException.NetworkError -> "网络异常"
+    is UPnPException.DeviceError -> "设备拒绝了请求"
+    else -> message ?: "未知错误"
+}
+```
+
+## 性能与稳定性
+
+- **轮询间隔 1 秒起步**：`getProgress()` 的缓存与插值就是为这个频率设计的；更高频率请用 `getProgressRealtime()` 并自行评估设备压力
+- **不要并发大量 SOAP 请求**：多数电视的渲染服务是单线程的，并发查询会排队甚至超时
+- **音量缓存**：`getVolume()` 同样走缓存，改变音量后如需立即回读可先 `refreshVolumeCache()`
+- **本地投屏保持网络活跃**：电视直接从手机拉流，锁屏或 WiFi 休眠会中断传输；长视频建议配合前台服务
+- **格式兼容**：优先 MP4 (H.264 + AAC)；字幕用外挂 SRT 并确保 URL 电视可达
+
+## 反模式
+
+| 反模式 | 问题 | 正确做法 |
+|---|---|---|
+| 在 `onDestroy` 之外调用 `cleanup()` 后继续投屏 | 引擎已释放，操作返回默认值 | 与 Activity 生命周期对齐 |
+| 每帧调用 `getProgressRealtime()` | 高频 SOAP 请求拖垮电视服务 | `getProgress()` 轮询 + 关键时刻 realtime |
+| 忽略 `CancellationException` | 协程取消语义被破坏 | catch 后先 re-throw |
+| 用 `Device.name` 做设备持久化主键 | 名称可变、可重复 | 用 `Device.id`（UDN） |
+| 切换视频不清理进度缓存 | UI 显示上一个视频的位置 | `clearProgressCache()` |
+
+## 更多
+
+- [常见问题 FAQ](FAQ.md)
+- [Demo 应用](../app-demo/)
+- [GitHub Issues](https://github.com/yinnho/UPnPCast/issues)

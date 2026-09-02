@@ -1,56 +1,35 @@
-# UPnPCast 发展路线图
+# Roadmap
 
-## 📋 **当前状态 (v1.1.0)**
+UPnPCast follows [Semantic Versioning](https://semver.org). Feature work is tracked here; bug fixes and doc updates land continuously. See [CHANGELOG.md](CHANGELOG.md) for what actually shipped.
 
-### ✅ **核心功能**
-- 🔍 **设备发现**：自动DLNA/UPnP设备发现
-- 📺 **媒体投屏**：照片、视频、音频投屏
-- 🎮 **播放控制**：播放、暂停、停止、拖拽、音量控制
-- 📱 **本地文件投屏**：内置HTTP文件服务器
-- 🚀 **现代架构**：Kotlin + 协程 + Android最佳实践
+## Current state (v1.3.0)
 
-### 📊 **技术特性**
-- **库文件大小**：~150KB (轻量级)
-- **第三方依赖**：3个核心依赖
-- **兼容性**：主流DLNA设备支持
-- **最低要求**：Android API 24+
+- ✅ SSDP discovery hardened: dedicated listener thread, `SO_REUSEADDR` before bind with ephemeral-port fallback, `MulticastLock` acquisition, device dedup by UDN
+- ✅ Coroutine-first public API (`DLNACast` facade over an instance-owned `CoreManager` engine)
+- ✅ Live playback state (`getPlaybackState`), cached progress with interpolation, volume/mute control
+- ✅ `CastOptions`: external subtitles (incl. Samsung), MIME/UPnP class overrides, custom DIDL-Lite
+- ✅ Local file casting with built-in HTTP server (Range/seek, correct MIME types, typed errors)
+- ✅ Test suite: 92 unit + protocol-level integration tests (in-process fake DLNA renderer)
+- ✅ Internals: typed `RemoteDevice`, unified `UpnpHttp` HTTP layer, pure-logic helpers
 
----
+## Near term (v1.3.x)
 
-## 🚀 **未来发展规划**
+- [ ] **GENA event subscription** — subscribe to AVTransport events instead of polling, so remote play/pause/stop is pushed to the app (`StateVariable` callbacks)
+- [ ] **Explicit `kotlinx-coroutines-android` dependency** — currently arrives transitively via androidx core-ktx; declare it explicitly so consumers aren't exposed to version drift
+- [ ] Restore the Maven Central publishing pipeline (v1.2.0+ currently ships via JitPack only; Central has legacy 1.1.2)
 
-### 🎵 **Phase 1: 高级媒体功能 (v1.2.0)**
-- **多音轨支持**: 音轨切换和信息获取
-- **字幕支持**: 内嵌和外挂字幕处理
-- **播放列表**: 多媒体文件队列播放
+## Later
 
-### 🎯 **Phase 2: 增强功能 (v1.3.0)**
-- **设备管理**: 设备分组和批量控制
-- **网络优化**: 更好的连接稳定性
-- **性能提升**: 内存和响应时间优化
+- [ ] Playlist / queue support (multiple items, next/previous, SetNextAVTransportURI)
+- [ ] Media browser support (ContentDirectory browsing of DLNA servers, not just renderers)
+- [ ] Multi-device group casting
+- [ ] Playback speed control (device-dependent)
+- [ ] IPv6 SSDP support
+- [ ] Demo app refresh to showcase `CastOptions`, `getPlaybackState` and the polling patterns
 
-### 🔧 **Phase 3: 用户体验 (v1.4.0)**
-- **智能推荐**: 基于使用历史的设备推荐
-- **预设配置**: 设备个性化配置保存
-- **高级控制**: 播放倍速、A-B循环等功能
+## Design principles
 
----
-
-## 📊 **开发优先级**
-
-| 功能 | 优先级 | 预计版本 |
-|------|--------|----------|
-| 字幕支持 | 高 | v1.2.0 |
-| 音轨切换 | 高 | v1.2.0 |
-| 播放列表 | 中 | v1.3.0 |
-| 网络优化 | 中 | v1.3.0 |
-| 用户体验 | 低 | v1.4.0 |
-
----
-
-## 🎯 **设计原则**
-
-- **向后兼容**：保持现有API稳定
-- **简洁易用**：维持简单的API设计
-- **轻量化**：控制库文件大小
-- **高性能**：优化内存和网络使用
+- **No breaking public API changes** within a minor version
+- **Coroutine-first**: suspend functions, no callbacks
+- **Lightweight**: no OkHttp/Gson; NanoHTTPD for local serving only
+- **Honest docs**: examples in the README/FAQ must compile against the current release
