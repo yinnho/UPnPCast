@@ -347,13 +347,7 @@ internal class SsdpDeviceDiscovery(
             displayName = "DLNA device",
             manufacturer = "Unknown",
             address = address,
-            details = mapOf(
-                "friendlyName" to "DLNA device",
-                "manufacturer" to "Unknown",
-                "modelName" to "Unknown Model",
-                "deviceType" to "Unknown",
-                "locationUrl" to location
-            )
+            locationUrl = location
         )
     }
 

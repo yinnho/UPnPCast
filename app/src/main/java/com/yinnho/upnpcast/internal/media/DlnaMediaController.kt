@@ -2,15 +2,9 @@ package com.yinnho.upnpcast.internal.media
 
 import android.util.Log
 import kotlinx.coroutines.*
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.io.OutputStreamWriter
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.Locale
 import com.yinnho.upnpcast.CastOptions
+import com.yinnho.upnpcast.internal.core.UpnpHttp
 import com.yinnho.upnpcast.internal.discovery.RemoteDevice
-import com.yinnho.upnpcast.internal.discovery.DeviceDescriptionParser
 import com.yinnho.upnpcast.internal.util.MetadataBuilder
 import com.yinnho.upnpcast.internal.util.SoapXml
 import com.yinnho.upnpcast.internal.util.UpnpTime
@@ -39,43 +33,31 @@ internal class DlnaMediaController(private val device: RemoteDevice) {
      */
     private fun buildServiceUrl(serviceTypePattern: String, defaultPath: String): String? {
         return try {
-            val services = device.details["services"] as? List<*>
-            if (services != null) {
-                for (service in services) {
-                    if (service is DeviceDescriptionParser.ServiceInfo) {
-                        if (service.serviceType.contains(serviceTypePattern, ignoreCase = true)) {
-                            var controlUrl = service.controlURL
-                            
-                            if (!controlUrl.startsWith("http://") && !controlUrl.startsWith("https://")) {
-                                val location = device.details["location"] as? String
-                                if (location != null) {
-                                    val url = java.net.URL(location)
-                                    val port = url.port.takeIf { it > 0 } ?: 80
-                                    val baseUrl = "http://${device.address}:$port"
-                                    controlUrl = if (controlUrl.startsWith("/")) {
-                                        "$baseUrl$controlUrl"
-                                    } else {
-                                        "$baseUrl/$controlUrl"
-                                    }
-                                }
+            for (service in device.services) {
+                if (service.serviceType.contains(serviceTypePattern, ignoreCase = true)) {
+                    var controlUrl = service.controlURL
+
+                    if (!controlUrl.startsWith("http://") && !controlUrl.startsWith("https://")) {
+                        val location = device.locationUrl
+                        if (location.isNotEmpty()) {
+                            val url = java.net.URL(location)
+                            val port = url.port.takeIf { it > 0 } ?: 80
+                            val baseUrl = "http://${device.address}:$port"
+                            controlUrl = if (controlUrl.startsWith("/")) {
+                                "$baseUrl$controlUrl"
+                            } else {
+                                "$baseUrl/$controlUrl"
                             }
-                            return controlUrl
                         }
                     }
+                    return controlUrl
                 }
             }
-            
-            val location = device.details["location"] as? String
-            val port = if (location != null) {
-                try {
-                    val url = java.net.URL(location)
-                    url.port.takeIf { it > 0 } ?: 80
-                } catch (e: Exception) {
-                    return null
-                }
-            } else {
-                return null
-            }
+
+            val location = device.locationUrl
+            if (location.isEmpty()) return null
+            val url = java.net.URL(location)
+            val port = url.port.takeIf { it > 0 } ?: 80
 
             "http://${device.address}:$port/$defaultPath"
         } catch (e: Exception) {
@@ -295,54 +277,12 @@ internal class DlnaMediaController(private val device: RemoteDevice) {
         soapAction: String,
         body: String,
         returnResponse: Boolean = true
-    ): Any? = withContext(Dispatchers.IO) {
-        var connection: HttpURLConnection? = null
-        try {
-            val soapEnvelope = """
-                <?xml version="1.0" encoding="utf-8"?>
-                <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
-                    <s:Body>
-                        $body
-                    </s:Body>
-                </s:Envelope>
-            """.trimIndent()
-            
-            connection = URL(url).openConnection() as HttpURLConnection
-            connection.requestMethod = "POST"
-            connection.setRequestProperty("Content-Type", "text/xml; charset=utf-8")
-            connection.setRequestProperty("SOAPAction", "\"$soapAction\"")
-            connection.setRequestProperty("User-Agent", "UPnPCast/1.0")
-            connection.doOutput = true
-            connection.connectTimeout = 3000
-            connection.readTimeout = 5000
-            
-            connection.outputStream.use { outputStream ->
-                OutputStreamWriter(outputStream, "UTF-8").use { writer ->
-                    writer.write(soapEnvelope)
-                    writer.flush()
-                }
-            }
-            
-            if (connection.responseCode == HttpURLConnection.HTTP_OK) {
-                if (returnResponse) {
-                    connection.inputStream.use { inputStream ->
-                        BufferedReader(InputStreamReader(inputStream, "UTF-8")).use { reader ->
-                            reader.readText()
-                        }
-                    }
-                } else {
-                    true
-                }
-            } else {
-                if (returnResponse) null else false
-            }
-            
-        } catch (e: Exception) {
-            Log.e(tag, "SOAP request failed: $soapAction, ${e.message}")
-            if (returnResponse) null else false
-        } finally {
-            connection?.disconnect()
+    ): Any? {
+        val response = UpnpHttp.postSoap(url, soapAction, body)
+        if (response == null) {
+            Log.e(tag, "SOAP request failed: $soapAction")
         }
+        return if (returnResponse) response else (response != null)
     }
     
     /**

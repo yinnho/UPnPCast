@@ -1,12 +1,9 @@
 package com.yinnho.upnpcast.internal.discovery
 
 import android.util.Log
+import com.yinnho.upnpcast.internal.core.UpnpHttp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * UPnP device description parser
@@ -33,14 +30,6 @@ internal class DeviceDescriptionParser {
         val modelName: String,
         val deviceType: String,
         val services: List<ServiceInfo> = emptyList()
-    )
-    
-    data class ServiceInfo(
-        val serviceType: String,
-        val serviceId: String,
-        val controlURL: String,
-        val eventSubURL: String,
-        val descriptorURL: String
     )
     
     /**
@@ -82,40 +71,12 @@ internal class DeviceDescriptionParser {
      * Download XML content
      */
     private suspend fun downloadXmlContent(locationUrl: String): String {
-        val maxRetries = 3
-        
-        for (attempt in 1..maxRetries) {
-            var connection: HttpURLConnection? = null
-            try {
-                val url = URL(locationUrl)
-                connection = url.openConnection() as HttpURLConnection
-                connection.connectTimeout = CONNECT_TIMEOUT
-                connection.readTimeout = READ_TIMEOUT
-                connection.requestMethod = "GET"
-                connection.setRequestProperty("User-Agent", "UPnPCast/1.0")
-                
-                val responseCode = connection.responseCode
-                if (responseCode != HttpURLConnection.HTTP_OK) {
-                    if (attempt == maxRetries) {
-                        return ""
-                    }
-                    kotlinx.coroutines.delay(1000L * attempt)
-                    continue
-                }
-                
-                BufferedReader(InputStreamReader(connection.inputStream, "UTF-8")).use { reader ->
-                    return reader.readText()
-                }
-            } catch (e: Exception) {
-                if (attempt < maxRetries) {
-                    kotlinx.coroutines.delay(1000L * attempt)
-                }
-            } finally {
-                connection?.disconnect()
-            }
-        }
-        
-        return ""
+        return UpnpHttp.get(
+            url = locationUrl,
+            connectTimeoutMs = CONNECT_TIMEOUT,
+            readTimeoutMs = READ_TIMEOUT,
+            maxRetries = 3
+        ) ?: ""
     }
     
     /**
@@ -216,21 +177,15 @@ internal class DeviceDescriptionParser {
         deviceInfo: DeviceInfo?
     ): RemoteDevice {
         val info = deviceInfo ?: DeviceInfo("DLNA Device", "Unknown", "Unknown Model", "Unknown")
-        
+
         return RemoteDevice(
             id = id,
             displayName = info.friendlyName,
             manufacturer = info.manufacturer,
             address = address,
-            details = mapOf(
-                "friendlyName" to info.friendlyName,
-                "manufacturer" to info.manufacturer,
-                "modelName" to info.modelName,
-                "deviceType" to info.deviceType,
-                "locationUrl" to locationUrl,
-                "location" to locationUrl,
-                "services" to info.services
-            )
+            model = info.modelName,
+            locationUrl = locationUrl,
+            services = info.services
         )
     }
 } 

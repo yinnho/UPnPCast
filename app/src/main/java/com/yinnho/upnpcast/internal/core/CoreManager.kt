@@ -130,8 +130,7 @@ internal class CoreManager(private val appContext: Context) {
             Log.e(TAG, "Device not found: ${device.id}")
             return false
         }
-        val services = remoteDevice.details["services"] as? List<*>
-        if (services.isNullOrEmpty()) {
+        if (remoteDevice.services.isEmpty()) {
             Log.e(TAG, "Device exposes no services: ${device.id}")
             return false
         }
@@ -313,7 +312,7 @@ internal class CoreManager(private val appContext: Context) {
 
     private fun convertToDevice(remoteDevice: RemoteDevice): Device {
         val manufacturer = remoteDevice.manufacturer.lowercase()
-        val model = (remoteDevice.details["modelName"] as? String ?: "").lowercase()
+        val model = remoteDevice.model.lowercase()
         val isTV = manufacturer.contains("tv") || model.contains("tv") ||
             manufacturer.contains("samsung") || manufacturer.contains("lg") ||
             manufacturer.contains("sony") || manufacturer.contains("xiaomi")
