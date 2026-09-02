@@ -22,7 +22,7 @@ android {
         minSdk = 24
         
         // Version information setting
-        version = "1.1.2"
+        version = "1.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
@@ -128,7 +128,7 @@ afterEvaluate {
                 
                 groupId = "com.yinnho.upnpcast"
                 artifactId = "upnpcast"
-                version = "1.1.2"
+                version = "1.2.0"
                 
                 pom {
                     name.set("UPnPCast")
