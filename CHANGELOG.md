@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### ✨ Added
+- **Protocol-level integration tests**: an in-process fake DLNA renderer (local HTTP + SOAP endpoints) drives the full control flow — device description parsing over HTTP, AVTransport/RenderingControl actions, seek/volume request building, response parsing, `playMediaDirect` sequencing, device-error handling and cache behavior (fetch, cache hit, interpolation only while `PLAYING`); the `DLNACast` facade is covered end to end (neutral defaults before `init`, lifecycle with a WifiManager-less context, fast-failure paths). Suite grows to 92 tests
 - **Unit tests**: the project's first test suite (69 tests) covers DLNA time parsing/formatting, SOAP XML value extraction (position/volume/mute), DIDL-Lite metadata construction (MIME/class detection, XML escaping, subtitle resources, verbatim override), MIME type mapping and SSDP header parsing — making the CI `test` step meaningful
 
 ### 🔧 Changed
