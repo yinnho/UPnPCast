@@ -5,6 +5,14 @@ All notable changes to the UPnPCast library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### ✨ Added
+- **Unit tests**: the project's first test suite (69 tests) covers DLNA time parsing/formatting, SOAP XML value extraction (position/volume/mute), DIDL-Lite metadata construction (MIME/class detection, XML escaping, subtitle resources, verbatim override), MIME type mapping and SSDP header parsing — making the CI `test` step meaningful
+
+### 🔧 Changed
+- Pure logic extracted from `DlnaMediaController`, `LocalFileServer` and `SsdpDeviceDiscovery` into internal helpers (`UpnpTime`, `SoapXml`, `MetadataBuilder`, `MimeTypes`, `SsdpHeaders`) with no behavior change
+
 ## [1.2.0] - 2026-09-02
 
 ### ✨ Added

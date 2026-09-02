@@ -13,6 +13,7 @@ import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import com.yinnho.upnpcast.internal.util.SsdpHeaders
 
 /**
  * SSDP device discovery service
@@ -224,9 +225,9 @@ internal class SsdpDeviceDiscovery(
      */
     private fun processNotify(message: String, fromAddress: InetAddress) {
         try {
-            val nts = extractHeader(message, "NTS")
+            val nts = SsdpHeaders.extract(message, "NTS")
             if (nts == "ssdp:alive") {
-                val headers = parseSsdpHeaders(message)
+                val headers = SsdpHeaders.parse(message)
                 val location = headers["location"]
                 
                 if (location != null) {
@@ -241,9 +242,9 @@ internal class SsdpDeviceDiscovery(
                     processSsdpResponse(message, fromAddress)
                 }
             } else if (nts == "ssdp:byebye") {
-                val usn = extractHeader(message, "USN")
+                val usn = SsdpHeaders.extract(message, "USN")
                 if (usn != null) {
-                    val headers = parseSsdpHeaders(message)
+                    val headers = SsdpHeaders.parse(message)
                     val location = headers["location"]
                     if (location != null) {
                         synchronized(processedLock) {
@@ -259,35 +260,11 @@ internal class SsdpDeviceDiscovery(
     }
 
     /**
-     * Extract HTTP header information
-     */
-    private fun extractHeader(message: String, headerName: String): String? {
-        val regex = "$headerName:\\s*(.+)".toRegex(RegexOption.IGNORE_CASE)
-        return regex.find(message)?.groupValues?.get(1)?.trim()
-    }
-
-    /**
-     * Parse SSDP header information
-     */
-    private fun parseSsdpHeaders(message: String): Map<String, String> {
-        val headers = mutableMapOf<String, String>()
-        message.lines().forEach { line ->
-            val colonIndex = line.indexOf(':')
-            if (colonIndex > 0) {
-                val key = line.substring(0, colonIndex).trim().lowercase()
-                val value = line.substring(colonIndex + 1).trim()
-                headers[key] = value
-            }
-        }
-        return headers
-    }
-
-    /**
      * Process SSDP response
      */
     private fun processSsdpResponse(response: String, fromAddress: InetAddress) {
         try {
-            val headers = parseSsdpHeaders(response)
+            val headers = SsdpHeaders.parse(response)
             val location = headers["location"]
             val usn = headers["usn"]
             
