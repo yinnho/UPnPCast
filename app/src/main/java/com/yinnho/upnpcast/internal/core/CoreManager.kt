@@ -97,27 +97,31 @@ internal class CoreManager {
         
         /**
          * Search for available DLNA devices
+         *
+         * [callback] fires with `complete = false` while devices are being
+         * discovered and exactly once with `complete = true` when the search
+         * finishes, carrying the full device list.
          */
-        fun search(timeout: Long, callback: (devices: List<Device>) -> Unit) {
+        fun search(timeout: Long, callback: (devices: List<Device>, complete: Boolean) -> Unit) {
             ensureInitialized {
                 cleanupSearchCallback()
-                
+
                 val foundDevices = mutableListOf<Device>()
-                
+
                 currentDeviceListCallback = { devices ->
                     foundDevices.clear()
                     foundDevices.addAll(devices)
-                    callback(devices)
+                    callback(devices, false)
                 }
-                
+
                 searchCompleted = false
                 notifiedDeviceIds.clear()
                 ssdpDiscovery?.startSearch()
-                
+
                 callbackTimeoutJob = ScopeManager.uiScope.launch {
                     delay(timeout)
                     searchCompleted = true
-                    callback(foundDevices)
+                    callback(getAllDevices(), true)
                     cleanupSearchCallback()
                 }
             }
@@ -134,13 +138,15 @@ internal class CoreManager {
                     connectAndPlay(bestDevice, url, title ?: "Media", options, callback)
                 } else {
                     Log.i(TAG, "No devices available, searching first...")
-                    search(3000) { devices ->
-                        if (devices.isNotEmpty()) {
-                            val bestDevice = selectBestDevice(devices)
-                            connectAndPlay(bestDevice, url, title ?: "Media", options, callback)
-                        } else {
-                            Log.w(TAG, "No devices found after search")
-                            callback(false)
+                    search(3000) { devices, complete ->
+                        if (complete) {
+                            if (devices.isNotEmpty()) {
+                                val bestDevice = selectBestDevice(devices)
+                                connectAndPlay(bestDevice, url, title ?: "Media", options, callback)
+                            } else {
+                                Log.w(TAG, "No devices found after search")
+                                callback(false)
+                            }
                         }
                     }
                 }
@@ -176,7 +182,7 @@ internal class CoreManager {
                 val remoteDevice = devices[device.id] ?: throw IllegalArgumentException("Device not found: ${device.id}")
                 val services = remoteDevice.details["services"] as? List<*>
                 if (!services.isNullOrEmpty()) {
-                    currentDevice = remoteDevice
+                    setCurrentDevice(remoteDevice)
                     ScopeManager.appScope.launch {
                         try {
                             val controller = DlnaMediaController.getController(remoteDevice)
@@ -237,12 +243,19 @@ internal class CoreManager {
         
         /**
          * Get current DLNA casting state
+         *
+         * The playback state reflects the last transport state observed via
+         * GetTransportInfo; call [getPlaybackState] for a live query.
          */
         fun getCurrentState(): State {
             val device = currentDevice?.let { convertToDevice(it) }
-            val playbackState = if (device != null) PlaybackState.PLAYING else PlaybackState.IDLE
+            val playbackState = if (device != null) {
+                mapTransportState(cacheManager.cachedTransportState)
+            } else {
+                PlaybackState.IDLE
+            }
             val (volume, muted) = cacheManager.getVolumeState()
-            
+
             return State(
                 isConnected = device != null,
                 currentDevice = device,
@@ -250,6 +263,33 @@ internal class CoreManager {
                 volume = if (volume >= 0) volume else -1,
                 isMuted = muted
             )
+        }
+
+        /**
+         * Query the live transport state from the connected device
+         */
+        suspend fun getPlaybackState(): PlaybackState {
+            val device = currentDevice ?: return PlaybackState.IDLE
+            return withContext(Dispatchers.IO) {
+                try {
+                    val controller = DlnaMediaController.getController(device)
+                    val state = controller.getTransportInfo()
+                    cacheManager.updateTransportState(state)
+                    mapTransportState(state)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to get playback state: ${e.message}")
+                    PlaybackState.IDLE
+                }
+            }
+        }
+
+        private fun mapTransportState(transportState: String?): PlaybackState = when (transportState) {
+            "PLAYING" -> PlaybackState.PLAYING
+            "PAUSED_PLAYBACK" -> PlaybackState.PAUSED
+            "TRANSITIONING" -> PlaybackState.BUFFERING
+            "STOPPED" -> PlaybackState.STOPPED
+            "NO_MEDIA_PRESENT", null -> PlaybackState.IDLE
+            else -> PlaybackState.IDLE
         }
         
         /**
@@ -315,7 +355,7 @@ internal class CoreManager {
                     return@ensureInitialized
                 }
 
-                currentDevice = remoteDevice
+                setCurrentDevice(remoteDevice)
                 LocalCastManager.castLocalFile(context, filePath, remoteDevice, title, options, ScopeManager.appScope, callback)
             }
         }
@@ -397,6 +437,20 @@ internal class CoreManager {
          */
         private inline fun <T> executeWithDevice(action: (RemoteDevice) -> T): T? {
             return currentDevice?.let(action)
+        }
+
+        /**
+         * Set the active device, isolating caches between devices: switching
+         * devices drops all cached state, re-casting on the same device
+         * drops only progress (media changed, device volume still valid)
+         */
+        private fun setCurrentDevice(remoteDevice: RemoteDevice) {
+            if (currentDevice?.id != remoteDevice.id) {
+                cacheManager.clearAll()
+            } else {
+                cacheManager.clearProgress()
+            }
+            currentDevice = remoteDevice
         }
         
 

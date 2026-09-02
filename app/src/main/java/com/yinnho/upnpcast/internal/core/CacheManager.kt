@@ -3,6 +3,8 @@ package com.yinnho.upnpcast.internal.core
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import com.yinnho.upnpcast.internal.discovery.RemoteDevice
 import com.yinnho.upnpcast.internal.media.DlnaMediaController
@@ -35,6 +37,14 @@ internal class CacheManager(
     private var lastProgressUpdate: Long = 0L
     @Volatile
     private var isPlaying: Boolean = false
+
+    /**
+     * Last observed AVTransport state (PLAYING / PAUSED_PLAYBACK / ...),
+     * null when never queried. Drives progress interpolation.
+     */
+    @Volatile
+    var cachedTransportState: String? = null
+        private set
     
     @Volatile
     private var volumeRefreshJob: Job? = null
@@ -128,14 +138,20 @@ internal class CacheManager(
         coreScope.launch {
             try {
                 val controller = DlnaMediaController.getController(device)
-                val progressInfo = controller.getPositionInfo()
-                
-                if (progressInfo != null) {
-                    val (currentMs, totalMs) = progressInfo
-                    updateProgressCache(currentMs, totalMs, System.currentTimeMillis())
-                    callback(true)
-                } else {
-                    callback(false)
+                coroutineScope {
+                    val positionDeferred = async { controller.getPositionInfo() }
+                    val stateDeferred = async { controller.getTransportInfo() }
+                    val progressInfo = positionDeferred.await()
+                    val transportState = stateDeferred.await()
+
+                    if (progressInfo != null) {
+                        val (currentMs, totalMs) = progressInfo
+                        cachedTransportState = transportState
+                        updateProgressCache(currentMs, totalMs, System.currentTimeMillis())
+                        callback(true)
+                    } else {
+                        callback(false)
+                    }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to refresh progress cache: ${e.message}")
@@ -186,6 +202,11 @@ internal class CacheManager(
         }
     }
     
+    fun updateTransportState(state: String?) {
+        cachedTransportState = state
+        updatePlayingState()
+    }
+
     private fun updateVolumeCache(volume: Int, muted: Boolean) {
         cachedVolume = volume
         cachedMuted = muted
@@ -200,9 +221,24 @@ internal class CacheManager(
     }
     
     private fun updatePlayingState() {
-        isPlaying = cachedTotalMs > 0
+        // Interpolate only from a confirmed PLAYING transport state; a
+        // paused device must not have its position advanced client-side
+        isPlaying = cachedTransportState == "PLAYING"
     }
-    
+
+    /**
+     * Clear progress caches (device kept, media changed)
+     */
+    fun clearProgress() {
+        cachedCurrentMs = 0L
+        cachedTotalMs = 0L
+        lastProgressUpdate = 0L
+        isPlaying = false
+        cachedTransportState = null
+        progressRefreshJob?.cancel()
+        progressRefreshJob = null
+    }
+
     /**
      * Clear all cached data
      */
@@ -210,16 +246,11 @@ internal class CacheManager(
         cachedVolume = -1
         cachedMuted = false
         lastVolumeUpdate = 0
-        
-        cachedCurrentMs = 0L
-        cachedTotalMs = 0L
-        lastProgressUpdate = 0L
-        isPlaying = false
-        
+
+        clearProgress()
+
         volumeRefreshJob?.cancel()
-        progressRefreshJob?.cancel()
         volumeRefreshJob = null
-        progressRefreshJob = null
     }
     
     /**
