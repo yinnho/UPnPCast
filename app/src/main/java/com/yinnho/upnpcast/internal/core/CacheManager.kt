@@ -6,12 +6,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import com.yinnho.upnpcast.internal.discovery.RemoteDevice
 import com.yinnho.upnpcast.internal.media.DlnaMediaController
 
 /**
- * Cache manager for volume and progress caching
- * Simplifies caching logic in CoreManager
+ * Cache manager for volume and progress caching.
+ * The controller is supplied per call by CoreManager, so cached values always
+ * belong to the device it was obtained for.
  */
 internal class CacheManager(
     private val coreScope: CoroutineScope
@@ -21,14 +21,14 @@ internal class CacheManager(
         private const val VOLUME_CACHE_DURATION = 10000L // 10 seconds volume cache validity period
         private const val PROGRESS_CACHE_DURATION = 5000L // 5 seconds progress cache validity period
     }
-    
+
     @Volatile
     private var cachedVolume: Int = -1
     @Volatile
     private var cachedMuted: Boolean = false
     @Volatile
     private var lastVolumeUpdate: Long = 0
-    
+
     @Volatile
     private var cachedCurrentMs: Long = 0L
     @Volatile
@@ -45,133 +45,107 @@ internal class CacheManager(
     @Volatile
     var cachedTransportState: String? = null
         private set
-    
+
     @Volatile
     private var volumeRefreshJob: Job? = null
     @Volatile
     private var progressRefreshJob: Job? = null
-    
+
     /**
-     * Get volume with caching and interpolation
+     * Get volume with caching; returns null when the device cannot be queried
      */
-    fun getVolume(
-        device: RemoteDevice?,
-        callback: (volume: Int?, isMuted: Boolean?, success: Boolean) -> Unit
-    ) {
-        if (device == null) {
-            callback(null, null, false)
-            return
-        }
-        
+    suspend fun getVolume(controller: DlnaMediaController?): Pair<Int?, Boolean?>? {
+        if (controller == null) return null
+
         val now = System.currentTimeMillis()
-        if (now - lastVolumeUpdate < VOLUME_CACHE_DURATION && cachedVolume >= 0) {
-            callback(cachedVolume, cachedMuted, true)
-            refreshVolumeCacheAsync(device)
+        return if (now - lastVolumeUpdate < VOLUME_CACHE_DURATION && cachedVolume >= 0) {
+            refreshVolumeCacheAsync(controller)
+            Pair(cachedVolume, cachedMuted)
         } else {
-            refreshVolumeCache(device) { success ->
-                if (success) {
-                    callback(cachedVolume, cachedMuted, true)
-                } else {
-                    callback(null, null, false)
-                }
-            }
+            if (refreshVolumeCache(controller)) Pair(cachedVolume, cachedMuted) else null
         }
     }
-    
+
     /**
-     * Get progress with caching and interpolation
+     * Get progress with caching and interpolation; returns null when the
+     * device cannot be queried
      */
-    fun getProgress(
-        device: RemoteDevice?,
-        callback: (currentMs: Long, totalMs: Long, success: Boolean) -> Unit
-    ) {
-        if (device == null) {
-            callback(0L, 0L, false)
-            return
-        }
-        
+    suspend fun getProgress(controller: DlnaMediaController?): Pair<Long, Long>? {
+        if (controller == null) return null
+
         val now = System.currentTimeMillis()
         val timeSinceLastUpdate = now - lastProgressUpdate
-        
-        if (timeSinceLastUpdate < PROGRESS_CACHE_DURATION && cachedTotalMs > 0) {
+
+        return if (timeSinceLastUpdate < PROGRESS_CACHE_DURATION && cachedTotalMs > 0) {
             val estimatedProgress = if (isPlaying) {
                 (cachedCurrentMs + timeSinceLastUpdate).coerceAtMost(cachedTotalMs)
             } else {
                 cachedCurrentMs
             }
-            callback(estimatedProgress, cachedTotalMs, true)
-            refreshProgressCacheAsync(device)
+            refreshProgressCacheAsync(controller)
+            Pair(estimatedProgress, cachedTotalMs)
         } else {
-            refreshProgressCache(device) { success ->
-                callback(cachedCurrentMs, cachedTotalMs, success)
-            }
+            if (refreshProgressCache(controller)) Pair(cachedCurrentMs, cachedTotalMs) else null
         }
     }
-    
+
     /**
      * Refresh volume cache from device
      */
-    fun refreshVolumeCache(device: RemoteDevice, callback: (success: Boolean) -> Unit = {}) {
-        coreScope.launch {
-            try {
-                val controller = DlnaMediaController.getController(device)
-                val volume = controller.getVolumeAsync()
-                val muted = controller.getMuteAsync()
-                
-                if (volume != null) {
-                    updateVolumeCache(volume, muted ?: false)
-                    callback(true)
-                } else {
-                    callback(false)
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to refresh volume cache: ${e.message}")
-                callback(false)
-            }
-        }
-    }
-    
-    /**
-     * Refresh progress cache from device
-     */
-    fun refreshProgressCache(device: RemoteDevice, callback: (success: Boolean) -> Unit = {}) {
-        coreScope.launch {
-            try {
-                val controller = DlnaMediaController.getController(device)
-                coroutineScope {
-                    val positionDeferred = async { controller.getPositionInfo() }
-                    val stateDeferred = async { controller.getTransportInfo() }
-                    val progressInfo = positionDeferred.await()
-                    val transportState = stateDeferred.await()
+    suspend fun refreshVolumeCache(controller: DlnaMediaController): Boolean {
+        return try {
+            val volume = controller.getVolumeAsync()
+            val muted = controller.getMuteAsync()
 
-                    if (progressInfo != null) {
-                        val (currentMs, totalMs) = progressInfo
-                        cachedTransportState = transportState
-                        updateProgressCache(currentMs, totalMs, System.currentTimeMillis())
-                        callback(true)
-                    } else {
-                        callback(false)
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to refresh progress cache: ${e.message}")
-                callback(false)
+            if (volume != null) {
+                updateVolumeCache(volume, muted ?: false)
+                true
+            } else {
+                false
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to refresh volume cache: ${e.message}")
+            false
         }
     }
-    
+
+    /**
+     * Refresh progress cache from device, fetching position and transport
+     * state in parallel
+     */
+    suspend fun refreshProgressCache(controller: DlnaMediaController): Boolean {
+        return try {
+            coroutineScope {
+                val positionDeferred = async { controller.getPositionInfo() }
+                val stateDeferred = async { controller.getTransportInfo() }
+                val progressInfo = positionDeferred.await()
+                val transportState = stateDeferred.await()
+
+                if (progressInfo != null) {
+                    cachedTransportState = transportState
+                    updateProgressCache(progressInfo.first, progressInfo.second, System.currentTimeMillis())
+                    true
+                } else {
+                    false
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to refresh progress cache: ${e.message}")
+            false
+        }
+    }
+
     /**
      * Async refresh volume cache (prevent duplicate requests)
      */
-    private fun refreshVolumeCacheAsync(device: RemoteDevice) {
+    private fun refreshVolumeCacheAsync(controller: DlnaMediaController) {
         if (volumeRefreshJob?.isActive == true) return
-        
+
         volumeRefreshJob = coreScope.launch {
             try {
-                val controller = DlnaMediaController.getController(device)
                 val volume = controller.getVolumeAsync()
                 val muted = controller.getMuteAsync()
-                
+
                 if (volume != null) {
                     updateVolumeCache(volume, muted ?: false)
                 }
@@ -180,28 +154,26 @@ internal class CacheManager(
             }
         }
     }
-    
+
     /**
      * Async refresh progress cache (prevent duplicate requests)
      */
-    private fun refreshProgressCacheAsync(device: RemoteDevice) {
+    private fun refreshProgressCacheAsync(controller: DlnaMediaController) {
         if (progressRefreshJob?.isActive == true) return
-        
+
         progressRefreshJob = coreScope.launch {
             try {
-                val controller = DlnaMediaController.getController(device)
                 val progressInfo = controller.getPositionInfo()
-                
+
                 if (progressInfo != null) {
-                    val (currentMs, totalMs) = progressInfo
-                    updateProgressCache(currentMs, totalMs, System.currentTimeMillis())
+                    updateProgressCache(progressInfo.first, progressInfo.second, System.currentTimeMillis())
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to refresh progress cache async: ${e.message}")
             }
         }
     }
-    
+
     fun updateTransportState(state: String?) {
         cachedTransportState = state
         updatePlayingState()
@@ -212,14 +184,14 @@ internal class CacheManager(
         cachedMuted = muted
         lastVolumeUpdate = System.currentTimeMillis()
     }
-    
+
     private fun updateProgressCache(currentMs: Long, totalMs: Long, timestamp: Long) {
         cachedCurrentMs = currentMs
         cachedTotalMs = totalMs
         lastProgressUpdate = timestamp
         updatePlayingState()
     }
-    
+
     private fun updatePlayingState() {
         // Interpolate only from a confirmed PLAYING transport state; a
         // paused device must not have its position advanced client-side
@@ -252,9 +224,9 @@ internal class CacheManager(
         volumeRefreshJob?.cancel()
         volumeRefreshJob = null
     }
-    
+
     /**
      * Get current volume state
      */
     fun getVolumeState(): Pair<Int, Boolean> = Pair(cachedVolume, cachedMuted)
-} 
+}

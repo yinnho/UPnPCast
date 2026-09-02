@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Local file server**: serve correct MIME types by file extension (some TVs reject `application/octet-stream`) and skip reliably to the requested Range offset (`InputStream.skip` may under-skip, corrupting seeked streams); bound the token registry (LRU, 64 entries) so repeated casts no longer leak entries
 
 ### 🔧 Changed
+- **Internal architecture**: the whole casting stack (coroutine scope, SSDP discovery, media controllers, caches) is now owned by a single `CoreManager` instance created in `init()` and released in `cleanup()` — the static/companion-object state, the global scope registry and the weak-reference controller registry are gone, so repeated `cleanup()` → `init()` cycles can no longer leak or resurrect stale state
+- **Native suspend internals**: internal layers (`CacheManager`, `LocalCastManager`, progress/volume queries) are suspend-native; the `suspendCancellableCoroutine` callback adapters and callback-threading through the internals were removed. Public API signatures are unchanged
+- **Typed errors for local casting**: `castLocalFile()` now throws `UPnPException.FileError` / `NetworkError` / `DeviceError` raised at the failure source, instead of mapping message strings back to exception types after the fact
+- **Not-initialized behavior**: calling cast/control/query APIs before `init()` returns neutral defaults (`false` / `null` / `IDLE` / empty list) instead of silently auto-initializing; `castLocalFile()` throws `UPnPException.UnknownError` instead of hanging forever
 - `DeviceDescriptionParser` is now `internal` (was accidentally public)
 - Removed unused `okhttp`/`gson` dependencies
 - Removed phantom `VideoSelectorActivity` declaration from the library manifest

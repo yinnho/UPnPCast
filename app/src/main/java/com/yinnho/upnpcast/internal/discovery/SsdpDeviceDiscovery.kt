@@ -1,11 +1,7 @@
 package com.yinnho.upnpcast.internal.discovery
 
 import android.util.Log
-import com.yinnho.upnpcast.internal.core.ScopeManager
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.net.BindException
 import java.net.DatagramPacket
@@ -23,6 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 internal class SsdpDeviceDiscovery(
     private val onDeviceFound: (RemoteDevice) -> Unit,
+    private val parseScope: CoroutineScope,
     private val executor: Executor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "SSDP-Discovery").apply {
             isDaemon = true
@@ -305,7 +302,7 @@ internal class SsdpDeviceDiscovery(
                 }
                 
                 // Asynchronous device description parsing
-                ScopeManager.appScope.launch {
+                parseScope.launch {
                     try {
                         val deviceInfo = descriptionParser.parseDeviceDescription(location)
                         
@@ -407,13 +404,7 @@ internal class SsdpDeviceDiscovery(
      */
     fun shutdown() {
         if (isShutdown.getAndSet(true)) return
-        
-        try {
-            // 协程作用域由ScopeManager统一管理，无需单独取消
-        } catch (e: Exception) {
-            Log.w(tag, "Failed to cancel search scope", e)
-        }
-        
+
         try {
             if (executor is ExecutorService) {
                 executor.shutdown()

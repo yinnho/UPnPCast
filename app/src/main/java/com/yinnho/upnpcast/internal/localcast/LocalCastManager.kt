@@ -3,134 +3,82 @@ package com.yinnho.upnpcast.internal.localcast
 import android.content.Context
 import android.util.Log
 import com.yinnho.upnpcast.CastOptions
-import com.yinnho.upnpcast.internal.discovery.RemoteDevice
+import com.yinnho.upnpcast.DLNACast
+import com.yinnho.upnpcast.internal.UPnPException
 import com.yinnho.upnpcast.internal.media.DlnaMediaController
-import kotlinx.coroutines.*
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 
 /**
  * Local file casting manager
  * Handles local file casting functionality and file server management
  */
-internal class LocalCastManager {
-    
-    companion object {
-        private const val TAG = "LocalCastManager"
-        
-        /**
-         * Cast local file to specified device
-         */
-        fun castLocalFile(
-            context: Context,
-            filePath: String,
-            device: RemoteDevice,
-            title: String?,
-            options: CastOptions,
-            scope: CoroutineScope,
-            callback: (success: Boolean, message: String) -> Unit
-        ) {
-            scope.launch {
-                try {
-                    val file = java.io.File(filePath)
-                    if (!file.exists() || !file.isFile) {
-                        withContext(Dispatchers.Main) {
-                            callback(false, "File not found: $filePath")
-                        }
-                        return@launch
-                    }
-                    
-                    if (!file.canRead()) {
-                        withContext(Dispatchers.Main) {
-                            callback(false, "File cannot be read, please check permissions: $filePath")
-                        }
-                        return@launch
-                    }
-                    
-                    val fileUrl = try {
-                        LocalFileServer.getInstance(context)
-                        LocalFileServer.getFileUrl(filePath)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to start local file server: ${e.message}")
-                        withContext(Dispatchers.Main) {
-                            callback(false, "Failed to start file server: ${e.message}")
-                        }
-                        return@launch
-                    }
-                    
-                    if (fileUrl == null) {
-                        withContext(Dispatchers.Main) {
-                            callback(false, "Failed to generate file access URL")
-                        }
-                        return@launch
-                    }
-                    
-                    Log.i(TAG, "Local file server URL: $fileUrl")
-                    
-                    val fileName = file.name
-                    val mediaTitle = title ?: fileName
-                    
-                    try {
-                        val controller = DlnaMediaController.getController(device)
-                        val success = controller.playMediaDirect(fileUrl, mediaTitle, options = options)
-                        withContext(Dispatchers.Main) {
-                            if (success) {
-                                callback(true, "Local file casting successful")
-                            } else {
-                                callback(false, "Failed to cast to device")
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Casting failed: ${e.message}")
-                        withContext(Dispatchers.Main) {
-                            callback(false, "Failed to cast to device: ${e.message}")
-                        }
-                    }
-                    
-                } catch (e: Exception) {
-                    Log.e(TAG, "Local file casting failed: ${e.message}")
-                    withContext(Dispatchers.Main) {
-                        callback(false, "Local file casting failed: ${e.message}")
-                    }
-                }
-            }
+internal object LocalCastManager {
+
+    private const val TAG = "LocalCastManager"
+
+    /**
+     * Cast a local file to the device controlled by [controller].
+     *
+     * @throws UPnPException.FileError the file does not exist or cannot be read
+     * @throws UPnPException.NetworkError the local file server could not be started
+     * @throws UPnPException.DeviceError the device rejected the cast request
+     */
+    suspend fun castLocalFile(
+        context: Context,
+        filePath: String,
+        controller: DlnaMediaController,
+        title: String?,
+        options: CastOptions
+    ) {
+        val file = java.io.File(filePath)
+        if (!file.exists() || !file.isFile) {
+            throw UPnPException.FileError("File not found: $filePath")
         }
-        
-        /**
-         * Get access URL for local file
-         */
-        fun getLocalFileUrl(context: Context, filePath: String): String? {
-            return try {
-                val file = java.io.File(filePath)
-                
-                if (!file.exists() || !file.isFile) {
-                    Log.w(TAG, "File not found: $filePath")
-                    return null
-                }
-                
-                LocalFileServer.getInstance(context)
-                LocalFileServer.getFileUrl(filePath)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to get local file URL: ${e.message}")
-                null
-            }
+        if (!file.canRead()) {
+            throw UPnPException.FileError("File cannot be read, please check permissions: $filePath")
         }
-        
-        /**
-         * Scan local video files on device
-         */
-        fun scanLocalVideos(context: Context, callback: (videos: List<com.yinnho.upnpcast.DLNACast.LocalVideo>) -> Unit) {
-            val scanner = VideoScanner(context)
-            scanner.scanLocalVideos(callback)
+
+        val fileUrl = try {
+            LocalFileServer.getInstance(context)
+            LocalFileServer.getFileUrl(filePath)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start local file server: ${e.message}")
+            throw UPnPException.NetworkError("Failed to start file server: ${e.message}", e)
+        } ?: throw UPnPException.NetworkError("Failed to generate file access URL")
+
+        Log.i(TAG, "Local file server URL: $fileUrl")
+
+        val mediaTitle = title ?: file.name
+        val success = try {
+            controller.playMediaDirect(fileUrl, mediaTitle, options = options)
+        } catch (e: Exception) {
+            Log.e(TAG, "Casting failed: ${e.message}")
+            throw UPnPException.DeviceError("Failed to cast to device: ${e.message}", e)
         }
-        
-        /**
-         * Clean up local casting resources
-         */
-        fun cleanup() {
-            try {
-                LocalFileServer.release()
-            } catch (e: Exception) {
-                Log.e(TAG, "Error releasing local file server: ${e.message}")
-            }
+        if (!success) {
+            throw UPnPException.DeviceError("Device rejected the cast request")
         }
     }
-} 
+
+    /**
+     * Scan local video files on device
+     */
+    suspend fun scanLocalVideos(context: Context): List<DLNACast.LocalVideo> =
+        suspendCancellableCoroutine { continuation ->
+            VideoScanner(context).scanLocalVideos { videos ->
+                if (continuation.isActive) continuation.resume(videos)
+            }
+        }
+
+    /**
+     * Clean up local casting resources
+     */
+    fun cleanup() {
+        try {
+            LocalFileServer.release()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error releasing local file server: ${e.message}")
+        }
+    }
+}
