@@ -11,7 +11,7 @@ import java.net.URL
 /**
  * UPnP device description parser
  */
-class DeviceDescriptionParser {
+internal class DeviceDescriptionParser {
     companion object {
         private const val TAG = "DeviceDescriptionParser"
         private const val CONNECT_TIMEOUT = 5000

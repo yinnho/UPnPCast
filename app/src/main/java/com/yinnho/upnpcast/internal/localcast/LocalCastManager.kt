@@ -2,6 +2,7 @@ package com.yinnho.upnpcast.internal.localcast
 
 import android.content.Context
 import android.util.Log
+import com.yinnho.upnpcast.CastOptions
 import com.yinnho.upnpcast.internal.discovery.RemoteDevice
 import com.yinnho.upnpcast.internal.media.DlnaMediaController
 import kotlinx.coroutines.*
@@ -20,9 +21,10 @@ internal class LocalCastManager {
          */
         fun castLocalFile(
             context: Context,
-            filePath: String, 
-            device: RemoteDevice, 
-            title: String?, 
+            filePath: String,
+            device: RemoteDevice,
+            title: String?,
+            options: CastOptions,
             scope: CoroutineScope,
             callback: (success: Boolean, message: String) -> Unit
         ) {
@@ -68,7 +70,7 @@ internal class LocalCastManager {
                     
                     try {
                         val controller = DlnaMediaController.getController(device)
-                        val success = controller.playMediaDirect(fileUrl, mediaTitle)
+                        val success = controller.playMediaDirect(fileUrl, mediaTitle, options = options)
                         withContext(Dispatchers.Main) {
                             if (success) {
                                 callback(true, "Local file casting successful")

@@ -125,14 +125,19 @@ object DLNACast {
     /**
      * Cast media to best available device
      */
-    suspend fun cast(url: String, title: String? = null): Boolean = 
-        suspendOnce { callback -> CoreManager.cast(url, title, callback) }
-    
+    suspend fun cast(url: String, title: String? = null, options: CastOptions = CastOptions()): Boolean =
+        suspendOnce { callback -> CoreManager.cast(url, title, options, callback) }
+
     /**
      * Cast media to specific device
      */
-    suspend fun castToDevice(device: Device, url: String, title: String? = null): Boolean = 
-        suspendOnce { callback -> CoreManager.castToDevice(device, url, title, callback) }
+    suspend fun castToDevice(
+        device: Device,
+        url: String,
+        title: String? = null,
+        options: CastOptions = CastOptions()
+    ): Boolean =
+        suspendOnce { callback -> CoreManager.castToDevice(device, url, title, options, callback) }
     
     /**
      * Get current playback progress
@@ -155,10 +160,15 @@ object DLNACast {
     /**
      * Cast local file to device
      */
-    suspend fun castLocalFile(filePath: String, device: Device, title: String? = null) {
+    suspend fun castLocalFile(
+        filePath: String,
+        device: Device,
+        title: String? = null,
+        options: CastOptions = CastOptions()
+    ) {
         suspendCancellableCoroutine<Unit> { cont ->
             var resumed = false
-            CoreManager.castLocalFileToDevice(filePath, device, title) { success, message ->
+            CoreManager.castLocalFileToDevice(filePath, device, title, options) { success, message ->
                 if (!resumed) {
                     resumed = true
                     if (success) {
