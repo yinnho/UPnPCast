@@ -5,10 +5,8 @@ import kotlinx.coroutines.*
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
-import java.lang.ref.WeakReference
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.concurrent.ConcurrentHashMap
 import java.util.Locale
 import com.yinnho.upnpcast.CastOptions
 import com.yinnho.upnpcast.internal.discovery.RemoteDevice
@@ -18,53 +16,14 @@ import com.yinnho.upnpcast.internal.discovery.DeviceDescriptionParser
  * DLNA media controller with SOAP-based control implementation
  */
 internal class DlnaMediaController(private val device: RemoteDevice) {
-    
+
     private val tag = "DlnaMediaController"
     private val coroutineScope = CoroutineScope(
-        Dispatchers.IO + 
-        SupervisorJob() + 
+        Dispatchers.IO +
+        SupervisorJob() +
         CoroutineName("DlnaController-${device.id}")
     )
-    
-    companion object {
-        private val deviceControllers = ConcurrentHashMap<String, WeakReference<DlnaMediaController>>()
-        
-        fun getController(device: RemoteDevice): DlnaMediaController {
-            cleanupExpiredControllers()
-            
-            val existingRef = deviceControllers[device.id]
-            val existing = existingRef?.get()
-            
-            return if (existing != null && !existing.isReleased) {
-                existing
-            } else {
-                val newController = DlnaMediaController(device)
-                deviceControllers[device.id] = WeakReference(newController)
-                newController
-            }
-        }
-        
-        fun clearAllControllers() {
-            deviceControllers.values.forEach { ref ->
-                ref.get()?.release()
-            }
-            deviceControllers.clear()
-        }
-        
-        /**
-         * Clean up expired weak references to prevent memory bloat
-         */
-        private fun cleanupExpiredControllers() {
-            val iterator = deviceControllers.entries.iterator()
-            while (iterator.hasNext()) {
-                val entry = iterator.next()
-                if (entry.value.get() == null) {
-                    iterator.remove()
-                }
-            }
-        }
-    }
-    
+
     @Volatile
     private var isReleased = false
     
