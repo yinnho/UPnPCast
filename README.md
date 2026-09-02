@@ -275,6 +275,36 @@ lifecycleScope.launch {
 }
 ```
 
+### Custom Casting Options (Subtitles & Metadata)
+
+Customize how media is presented to the target device with `CastOptions` — attach a subtitle, override the MIME type, or supply the full DIDL-Lite metadata:
+
+```kotlin
+// Attach an external subtitle (URL must be reachable by the TV)
+val options = CastOptions(
+    subtitleUri = "http://192.168.1.100:8080/movie.srt"
+)
+val success = DLNACast.castToDevice(device, url, title, options)
+
+// Full control for advanced users: provide the DIDL-Lite metadata verbatim
+val custom = CastOptions(
+    metadata = """<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">
+      <item id="1" parentID="0" restricted="1">
+        <dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">My Title</dc:title>
+      </item>
+    </DIDL-Lite>"""
+)
+DLNACast.cast(url, title, custom)
+```
+
+| Field | Description |
+|---|---|
+| `metadata` | Full DIDL-Lite override, sent verbatim (other fields ignored) |
+| `subtitleUri` | HTTP(S) subtitle URL attached to the cast |
+| `subtitleMimeType` | Subtitle MIME type, defaults to `text/srt` |
+| `mimeType` | Overrides the auto-detected media MIME type |
+| `upnpClass` | Overrides the UPnP object class |
+
 ### Local File Casting
 ```kotlin
 lifecycleScope.launch {

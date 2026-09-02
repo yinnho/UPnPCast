@@ -3,6 +3,7 @@ package com.yinnho.upnpcast.internal.core
 import android.content.Context
 import android.net.wifi.WifiManager
 import android.util.Log
+import com.yinnho.upnpcast.CastOptions
 import com.yinnho.upnpcast.DLNACast.Device
 
 import com.yinnho.upnpcast.DLNACast.PlaybackState
@@ -125,18 +126,18 @@ internal class CoreManager {
         /**
          * Cast media to available device (auto-select best device)
          */
-        fun cast(url: String, title: String?, callback: (Boolean) -> Unit) {
+        fun cast(url: String, title: String?, options: CastOptions, callback: (Boolean) -> Unit) {
             ensureInitialized {
                 val availableDevices = getAllDevices()
                 if (availableDevices.isNotEmpty()) {
                     val bestDevice = selectBestDevice(availableDevices)
-                    connectAndPlay(bestDevice, url, title ?: "Media", callback)
+                    connectAndPlay(bestDevice, url, title ?: "Media", options, callback)
                 } else {
                     Log.i(TAG, "No devices available, searching first...")
                     search(3000) { devices ->
                         if (devices.isNotEmpty()) {
                             val bestDevice = selectBestDevice(devices)
-                            connectAndPlay(bestDevice, url, title ?: "Media", callback)
+                            connectAndPlay(bestDevice, url, title ?: "Media", options, callback)
                         } else {
                             Log.w(TAG, "No devices found after search")
                             callback(false)
@@ -145,20 +146,32 @@ internal class CoreManager {
                 }
             }
         }
-        
+
         /**
          * Cast media to specific device
          */
-        fun castToDevice(device: Device, url: String, title: String?, callback: (Boolean) -> Unit) {
+        fun castToDevice(
+            device: Device,
+            url: String,
+            title: String?,
+            options: CastOptions,
+            callback: (Boolean) -> Unit
+        ) {
             ensureInitialized {
-                connectAndPlay(device, url, title ?: "Media", callback)
+                connectAndPlay(device, url, title ?: "Media", options, callback)
             }
         }
-        
+
         /**
          * Connect to device and start media playback
          */
-        fun connectAndPlay(device: Device, url: String, title: String, callback: (success: Boolean) -> Unit) {
+        fun connectAndPlay(
+            device: Device,
+            url: String,
+            title: String,
+            options: CastOptions,
+            callback: (success: Boolean) -> Unit
+        ) {
             try {
                 val remoteDevice = devices[device.id] ?: throw IllegalArgumentException("Device not found: ${device.id}")
                 val services = remoteDevice.details["services"] as? List<*>
@@ -167,7 +180,7 @@ internal class CoreManager {
                     ScopeManager.appScope.launch {
                         try {
                             val controller = DlnaMediaController.getController(remoteDevice)
-                            val success = controller.playMediaDirect(url, title)
+                            val success = controller.playMediaDirect(url, title, options = options)
                             withContext(Dispatchers.Main) {
                                 callback(success)
                             }
@@ -282,22 +295,28 @@ internal class CoreManager {
         /**
          * Cast local file to specified device
          */
-        fun castLocalFileToDevice(filePath: String, device: Device, title: String?, callback: (success: Boolean, message: String) -> Unit) {
+        fun castLocalFileToDevice(
+            filePath: String,
+            device: Device,
+            title: String?,
+            options: CastOptions,
+            callback: (success: Boolean, message: String) -> Unit
+        ) {
             ensureInitialized {
                 val context = contextRef?.get()
                 if (context == null) {
                     callback(false, "Context has been released, please reinitialize")
                     return@ensureInitialized
                 }
-                
+
                 val remoteDevice = devices[device.id]
                 if (remoteDevice == null) {
                     callback(false, "Device not found: ${device.id}")
                     return@ensureInitialized
                 }
-                
+
                 currentDevice = remoteDevice
-                LocalCastManager.castLocalFile(context, filePath, remoteDevice, title, ScopeManager.appScope, callback)
+                LocalCastManager.castLocalFile(context, filePath, remoteDevice, title, options, ScopeManager.appScope, callback)
             }
         }
         

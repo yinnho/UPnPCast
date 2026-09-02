@@ -5,6 +5,22 @@ All notable changes to the UPnPCast library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### 🐛 Fixed
+- **Device discovery failures (#1)**: set `SO_REUSEADDR` before binding SSDP port 1900 (previously set after binding, which was ineffective) with an ephemeral-port fallback; run the SSDP response listener on a dedicated daemon thread started before M-SEARCH sends so no response is lost; read timeouts no longer terminate the listener loop
+- **Multicast reception**: acquire a `WifiManager.MulticastLock` during `init()` so the Wi-Fi stack does not filter SSDP multicast traffic
+- **Re-initialization**: `cleanup()` → `init()` cycles now work — coroutine scopes are recreated and the cache manager rebinds to the current scope
+- **Control URL**: default port to 80 when the device location URL has no explicit port (was producing `http://host:-1/...`)
+
+### ✨ Added
+- **`CastOptions` (#2)**: customize casting with `subtitleUri` (external subtitles, incl. Samsung `sec:SubtitleUri`), `subtitleMimeType`, `mimeType` and `upnpClass` overrides, or a full DIDL-Lite `metadata` override — available on `cast()`, `castToDevice()` and `castLocalFile()`
+
+### 🔧 Changed
+- `DeviceDescriptionParser` is now `internal` (was accidentally public)
+- Removed unused `okhttp`/`gson` dependencies
+- Removed phantom `VideoSelectorActivity` declaration from the library manifest
+
 ## [1.1.0] - 2025-06-03
 
 ### 🚀 Major Architecture Refactoring

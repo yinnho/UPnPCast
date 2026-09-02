@@ -263,6 +263,36 @@ lifecycleScope.launch {
 }
 ```
 
+### 自定义投屏参数（字幕与元数据）
+
+通过 `CastOptions` 自定义投屏时传给设备的参数——附带字幕、覆盖 MIME 类型，或直接提供完整 DIDL-Lite 元数据：
+
+```kotlin
+// 附加外挂字幕（URL 需电视可访问）
+val options = CastOptions(
+    subtitleUri = "http://192.168.1.100:8080/movie.srt"
+)
+val success = DLNACast.castToDevice(device, url, title, options)
+
+// 高级用户：原样发送自定义 DIDL-Lite 元数据
+val custom = CastOptions(
+    metadata = """<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">
+      <item id="1" parentID="0" restricted="1">
+        <dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">我的标题</dc:title>
+      </item>
+    </DIDL-Lite>"""
+)
+DLNACast.cast(url, title, custom)
+```
+
+| 字段 | 说明 |
+|---|---|
+| `metadata` | 完整 DIDL-Lite 覆盖，原样发送（设置后忽略其他字段） |
+| `subtitleUri` | 附加到投屏的字幕 HTTP(S) 地址 |
+| `subtitleMimeType` | 字幕 MIME 类型，默认 `text/srt` |
+| `mimeType` | 覆盖自动识别的媒体 MIME 类型 |
+| `upnpClass` | 覆盖 UPnP 对象类别 |
+
 ### 本地文件投屏
 ```kotlin
 lifecycleScope.launch {
