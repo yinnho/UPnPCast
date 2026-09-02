@@ -136,7 +136,7 @@ afterEvaluate {
                 
                 pom {
                     name.set("UPnPCast")
-                    description.set("Ultimate Android UPnP/DLNA Media Streaming Library | Easy TV Casting & Screen Mirroring Solution for Smart TVs, Media Players & IoT Devices | Auto Device Discovery, Local/Remote Video Streaming, Zero-Config Setup | Supports Android 7.0+ | Lightweight, High Performance, Production Ready")
+                    description.set("Android DLNA/UPnP casting library with a coroutine-first Kotlin API: SSDP device discovery, playback and volume control, local-file streaming with Range support, and external subtitles via CastOptions.")
                     url.set("https://github.com/yinnho/UPnPCast")
                     
                     licenses {

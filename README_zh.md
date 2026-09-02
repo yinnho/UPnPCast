@@ -2,42 +2,38 @@
 
 [![CI/CD](https://github.com/yinnho/UPnPCast/actions/workflows/ci.yml/badge.svg)](https://github.com/yinnho/UPnPCast/actions)
 [![Release](https://img.shields.io/github/v/release/yinnho/UPnPCast)](https://github.com/yinnho/UPnPCast/releases)
-[![License](https://img.shields.io/github/license/yinnho/UPnPCast)](LICENSE)
-[![Maven Central](https://img.shields.io/maven-central/v/com.yinnho.upnpcast/upnpcast)](https://central.sonatype.com/artifact/com.yinnho.upnpcast/upnpcast)
 [![JitPack](https://jitpack.io/v/yinnho/UPnPCast.svg)](https://jitpack.io/#yinnho/UPnPCast)
+[![License](https://img.shields.io/github/license/yinnho/UPnPCast)](LICENSE)
 
-🚀 现代化、简洁的Android DLNA/UPnP投屏库，专为替代已停止维护的Cling项目而设计。
+现代化 Android DLNA/UPnP 投屏库，协程优先的 Kotlin API——SSDP 设备发现、播放控制、本地文件投屏、外挂字幕。已停止维护的 [Cling](https://github.com/4thline/cling) 项目的干净替代品，持续维护中。
 
-> **中文文档** | **[English Documentation](README.md)**
+> 中文文档 | **[English Documentation](README.md)**
 
 ## 功能特性
 
-- 🔍 **设备发现**: 基于SSDP协议的自动DLNA/UPnP设备发现
-- 📺 **媒体投屏**: 支持图片、视频、音频投屏到DLNA兼容设备
-- 🎮 **播放控制**: 播放、暂停、停止、拖拽、音量控制、静音等功能
-- 📱 **简单集成**: 简洁的API接口和直观的回调机制
-- 🚀 **现代架构**: 使用Kotlin、协程和Android最佳实践构建
-- 🔧 **高度兼容**: 经过主流电视品牌测试（小米、三星、LG、索尼）
-- ⚡ **轻量级**: 最小依赖，性能优化
+- 🔍 **设备发现** — SSDP M-SEARCH + 独立监听线程、`MulticastLock` 处理、1900 端口被占用时自动回退临时端口
+- 📺 **媒体投屏** — 投射远程视频/音频/图片 URL 到任意 DLNA 兼容设备，带 DIDL-Lite 元数据
+- 📱 **本地文件投屏** — 内置 HTTP 文件服务器，支持 Range/拖拽与按扩展名返回正确的 MIME 类型
+- 🎮 **完整播放控制** — 播放、暂停、停止、拖拽、音量、静音（AVTransport/RenderingControl SOAP）
+- 📊 **实时状态与进度** — `getPlaybackState()` 反映远端暂停/停止；进度查询带短缓存与播放中插值，也可强制刷新
+- 💬 **字幕与元数据** — `CastOptions` 支持外挂字幕（含三星 `sec:SubtitleUri`）、MIME/UPnP 类别覆盖、完整 DIDL-Lite 自定义
+- 🚀 **协程优先 API** — 所有网络操作均为 `suspend` 函数，无回调地狱
+- ✅ **有测试保障** — 92 个单元 + 协议级集成测试，由进程内假 DLNA 渲染器驱动
+- 🪶 **轻量** — 不依赖 OkHttp、Gson；本地文件服务仅用 NanoHTTPD
 
-## 快速开始
+## 环境要求
 
-### 安装
+- Android 7.0+（API 24）
+- 手机与电视在同一局域网（DLNA 仅限局域网）
+- 库的 manifest 已声明 `INTERNET`、`ACCESS_NETWORK_STATE`、`ACCESS_WIFI_STATE`、`CHANGE_WIFI_MULTICAST_STATE` 权限，会自动合并到你的应用；媒体 URL 需要 HTTP 明文传输，已默认开启
 
-#### 方式一：Maven Central（推荐 - 官方发布！）
+## 安装
 
-在应用的 `build.gradle` 中添加：
-```gradle
-dependencies {
-    implementation 'com.yinnho.upnpcast:upnpcast:1.1.2'
-}
-```
+正式版本通过 **JitPack** 分发：
 
-#### 方式二：JitPack（备选方案）
-
-在根目录的 `build.gradle` 中添加：
-```gradle
-allprojects {
+```groovy
+// settings.gradle（Groovy DSL）或 settings.gradle.kts
+dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
@@ -46,14 +42,16 @@ allprojects {
 }
 ```
 
-添加依赖：
-```gradle
+```groovy
+// app/build.gradle
 dependencies {
-    implementation 'com.github.yinnho:UPnPCast:1.1.2'
+    implementation 'com.github.yinnho:UPnPCast:v1.3.0'
 }
 ```
 
-### 基本用法
+Kotlin DSL 写法：`implementation("com.github.yinnho:UPnPCast:v1.3.0")`
+
+## 快速开始
 
 ```kotlin
 import com.yinnho.upnpcast.DLNACast
@@ -61,66 +59,33 @@ import com.yinnho.upnpcast.DLNACast
 class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        // 初始化
         DLNACast.init(this)
-        
-        // 使用协程进行所有操作
-        lifecycleScope.launch {
-            searchDevices()
-            performSmartCast()
-        }
+
+        lifecycleScope.launch { castToTv() }
     }
-    
-    private suspend fun searchDevices() {
+
+    private suspend fun castToTv() {
         try {
-            // 设备发现（带超时）
             val devices = DLNACast.search(timeout = 5000)
-            Log.d("DLNA", "发现 ${devices.size} 个设备")
-            
-            // 显示设备
-            devices.forEach { device ->
-                val icon = if (device.isTV) "📺" else "📱"
-                Log.d("DLNA", "$icon ${device.name} (${device.address})")
-            }
-        } catch (e: Exception) {
-            Log.e("DLNA", "搜索失败: ${e.message}")
-        }
-    }
-    
-    private suspend fun performSmartCast() {
-        try {
-            // 智能投屏 - 自动查找并选择最佳设备
-            val success = DLNACast.cast("http://your-video.mp4", "视频标题")
+            val tv = devices.firstOrNull { it.isTV } ?: return
+
+            val success = DLNACast.castToDevice(
+                device = tv,
+                url = "http://example.com/video.mp4",
+                title = "我的视频"
+            )
             if (success) {
-                Log.d("DLNA", "智能投屏开始!")
-                controlPlayback()
-            } else {
-                Log.e("DLNA", "投屏失败")
+                DLNACast.pause()
+                DLNACast.seek(30_000)
+
+                val state = DLNACast.getState()
+                Log.d("DLNA", "已连接 ${state.currentDevice?.name}，播放中: ${state.isPlaying}")
             }
         } catch (e: Exception) {
-            Log.e("DLNA", "投屏错误: ${e.message}")
+            Log.e("DLNA", "投屏失败", e)
         }
     }
-    
-    private suspend fun controlPlayback() {
-        try {
-            // 控制播放
-            val pauseSuccess = DLNACast.control(DLNACast.MediaAction.PAUSE)
-            Log.d("DLNA", "暂停: $pauseSuccess")
-            
-            // 获取当前状态
-            val state = DLNACast.getState()
-            Log.d("DLNA", "已连接: ${state.isConnected}, 正在播放: ${state.isPlaying}")
-            
-            // 跳转到30秒
-            val seekSuccess = DLNACast.seek(30000)
-            Log.d("DLNA", "跳转到30秒: $seekSuccess")
-        } catch (e: Exception) {
-            Log.e("DLNA", "控制错误: ${e.message}")
-        }
-    }
-    
+
     override fun onDestroy() {
         super.onDestroy()
         DLNACast.cleanup()
@@ -128,161 +93,108 @@ class MainActivity : AppCompatActivity() {
 }
 ```
 
-## API参考
+## API 参考
 
-### 🚀 核心方法（所有挂起函数）
+所有网络操作均为 `suspend` 函数，请在协程中调用。
+
+### 生命周期
 
 ```kotlin
-// 初始化库（在onCreate中调用一次）
-DLNACast.init(context: Context)
-
-// 搜索设备（返回发现的设备列表）
-suspend fun DLNACast.search(timeout: Long = 5000): List<Device>
-
-// 智能投屏 - 自动选择最佳可用设备
-suspend fun DLNACast.cast(url: String, title: String? = null): Boolean
-
-// 投屏到指定设备
-suspend fun DLNACast.castToDevice(device: Device, url: String, title: String): Boolean
-
-// 投屏本地视频文件
-suspend fun DLNACast.castLocalFile(device: Device, video: LocalVideo): Boolean
-
-// 扫描本地视频文件
-suspend fun DLNACast.scanLocalVideos(): List<LocalVideo>
-
-// 媒体控制操作
-suspend fun DLNACast.control(action: MediaAction): Boolean
-
-// 跳转到指定位置（毫秒）
-suspend fun DLNACast.seek(positionMs: Long): Boolean
+fun DLNACast.init(context: Context)   // 创建引擎（可重复调用；会替换旧引擎）
+fun DLNACast.cleanup()                // 释放全部资源（在 onDestroy 中调用）
+fun DLNACast.getState(): State        // 最近一次观测到的投屏状态（同步）
+fun DLNACast.clearProgressCache()     // 清除进度缓存（如切换媒体后）
 ```
 
-### 📊 状态管理
+### 发现与投屏
 
 ```kotlin
-// 获取当前投屏状态（同步）
-fun DLNACast.getState(): State
+suspend fun search(timeout: Long = 5000): List<Device>
 
-// 获取播放进度（同步）
-fun DLNACast.getProgress(): Progress
+suspend fun cast(url: String, title: String? = null, options: CastOptions = CastOptions()): Boolean
+suspend fun castToDevice(device: Device, url: String, title: String? = null,
+                         options: CastOptions = CastOptions()): Boolean
 
-// 获取音量信息（同步）
-fun DLNACast.getVolume(): Volume
-
-// 清理资源（在onDestroy中调用）
-fun DLNACast.cleanup()
+suspend fun scanLocalVideos(context: Context): List<LocalVideo>
+suspend fun castLocalFile(filePath: String, device: Device, title: String? = null,
+                          options: CastOptions = CastOptions())
 ```
 
-### 📋 数据类型
+`castLocalFile` 会启动内置文件服务器，失败时抛出类型化异常：
+`UPnPException.FileError`（文件不可读）、`NetworkError`（服务器/URL 失败）、`DeviceError`（设备拒绝投屏）；未初始化时抛出 `UnknownError`。
+
+### 播放控制
 
 ```kotlin
-// 设备信息
+suspend fun control(action: MediaAction, value: Any? = null): Boolean
+
+// 便捷方法
+suspend fun play(): Boolean
+suspend fun pause(): Boolean
+suspend fun stop(): Boolean
+suspend fun seek(positionMs: Long): Boolean
+suspend fun setVolume(volume: Int): Boolean   // 0-100
+suspend fun setMute(mute: Boolean): Boolean
+```
+
+### 状态、进度与音量查询
+
+```kotlin
+suspend fun getPlaybackState(): PlaybackState   // 实时查询（GetTransportInfo）——反映远端暂停/停止
+suspend fun getProgress(): Pair<Long, Long>?    // (当前位置ms, 总时长ms)，短缓存 + 插值
+suspend fun getProgressRealtime(): Pair<Long, Long>?  // 强制刷新，不走缓存
+suspend fun getVolume(): Pair<Int?, Boolean?>?  // (音量 0-100, 是否静音)
+suspend fun refreshProgressCache(): Boolean
+suspend fun refreshVolumeCache(): Boolean
+```
+
+### 数据类型
+
+```kotlin
 data class Device(
-    val id: String,           // 唯一设备标识符
-    val name: String,         // 显示名称（如"客厅电视"）
-    val address: String,      // IP地址
-    val isTV: Boolean         // 是否为电视设备
+    val id: String,        // 唯一设备标识（UDN）
+    val name: String,      // 友好名称，如"客厅电视"
+    val address: String,   // IP 地址
+    val isTV: Boolean      // 是否为渲染设备
 )
 
-// 本地视频文件信息
 data class LocalVideo(
-    val path: String,         // 文件完整路径
-    val name: String,         // 显示名称
-    val size: Long,           // 文件大小（字节）
-    val duration: Long        // 时长（毫秒）
+    val id: String,
+    val title: String,
+    val path: String,      // 文件绝对路径
+    val duration: String,  // 格式化时长，如 "01:23:45"
+    val size: String,      // 格式化大小，如 "1.2 GB"
+    val durationMs: Long
 )
 
-// 媒体控制操作
-enum class MediaAction {
-    PLAY, PAUSE, STOP
-}
+enum class MediaAction { PLAY, PAUSE, STOP, VOLUME, MUTE, SEEK }
 
-// 播放状态
-enum class PlaybackState {
-    IDLE,                     // 未连接或无媒体
-    PLAYING,                  // 正在播放
-    PAUSED,                   // 已暂停
-    STOPPED,                  // 已停止
-    BUFFERING,                // 加载/缓冲中
-    ERROR                     // 错误状态
-}
+enum class PlaybackState { IDLE, PLAYING, PAUSED, STOPPED, BUFFERING, ERROR }
 
-// 当前投屏状态
 data class State(
-    val isConnected: Boolean,     // 是否连接到设备
-    val currentDevice: Device?,   // 当前目标设备
-    val playbackState: PlaybackState,  // 当前播放状态
-    val isPlaying: Boolean,       // 是否正在播放媒体
-    val isPaused: Boolean,        // 是否已暂停媒体
-    val volume: Int,              // 当前音量（0-100）
-    val isMuted: Boolean          // 是否静音
-)
-
-// 播放进度信息
-data class Progress(
-    val currentMs: Long,          // 当前位置（毫秒）
-    val totalMs: Long,            // 总时长（毫秒）
-    val percentage: Float         // 进度百分比（0.0-1.0）
-)
-
-// 音量信息
-data class Volume(
-    val level: Int,               // 音量级别（0-100）
-    val isMuted: Boolean          // 静音状态
-)
-```
-
-## 🔥 高级用法示例
-
-### 投屏到指定设备
-```kotlin
-lifecycleScope.launch {
-    try {
-        // 首先，搜索设备
-        val devices = DLNACast.search(timeout = 5000)
-        
-        // 找到您偏好的设备
-        val targetDevice = devices.firstOrNull { it.name.contains("客厅") }
-        
-        if (targetDevice != null) {
-            // 投屏到指定设备
-            val success = DLNACast.castToDevice(
-                device = targetDevice,
-                url = "http://your-video.mp4",
-                title = "我的电影"
-            )
-            
-            if (success) {
-                Log.d("DLNA", "成功投屏到 ${targetDevice.name}")
-            }
-        }
-    } catch (e: Exception) {
-        Log.e("DLNA", "投屏失败: ${e.message}")
-    }
+    val isConnected: Boolean,
+    val currentDevice: Device?,
+    val playbackState: PlaybackState,
+    val volume: Int = -1,       // -1 表示未知
+    val isMuted: Boolean = false
+) {
+    val isPlaying: Boolean  // playbackState == PLAYING
+    val isPaused: Boolean   // playbackState == PAUSED
+    val isIdle: Boolean     // playbackState == IDLE
 }
 ```
 
-### 自定义投屏参数（字幕与元数据）
+### CastOptions
 
-通过 `CastOptions` 自定义投屏时传给设备的参数——附带字幕、覆盖 MIME 类型，或直接提供完整 DIDL-Lite 元数据：
+自定义发送给设备的参数：
 
 ```kotlin
 // 附加外挂字幕（URL 需电视可访问）
-val options = CastOptions(
-    subtitleUri = "http://192.168.1.100:8080/movie.srt"
-)
-val success = DLNACast.castToDevice(device, url, title, options)
+val options = CastOptions(subtitleUri = "http://192.168.1.100:8080/movie.srt")
+DLNACast.castToDevice(device, url, title, options)
 
-// 高级用户：原样发送自定义 DIDL-Lite 元数据
-val custom = CastOptions(
-    metadata = """<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">
-      <item id="1" parentID="0" restricted="1">
-        <dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">我的标题</dc:title>
-      </item>
-    </DIDL-Lite>"""
-)
-DLNACast.cast(url, title, custom)
+// 高级用法：原样发送自定义 DIDL-Lite 元数据
+val custom = CastOptions(metadata = """<DIDL-Lite ...>...</DIDL-Lite>""")
 ```
 
 | 字段 | 说明 |
@@ -293,86 +205,74 @@ DLNACast.cast(url, title, custom)
 | `mimeType` | 覆盖自动识别的媒体 MIME 类型 |
 | `upnpClass` | 覆盖 UPnP 对象类别 |
 
+## 高级用法
+
 ### 本地文件投屏
+
 ```kotlin
 lifecycleScope.launch {
+    val videos = DLNACast.scanLocalVideos(this@MainActivity)
+    val video = videos.firstOrNull() ?: return@launch
+    val tv = DLNACast.search().firstOrNull { it.isTV } ?: return@launch
+
     try {
-        // 扫描本地视频文件
-        val localVideos = DLNACast.scanLocalVideos()
-        
-        // 找到要播放的视频
-        val videoToPlay = localVideos.firstOrNull { it.name.contains("电影") }
-        
-        if (videoToPlay != null) {
-            // 获取可用设备
-            val devices = DLNACast.search()
-            val device = devices.firstOrNull()
-            
-            if (device != null) {
-                // 投屏本地文件
-                val success = DLNACast.castLocalFile(device, videoToPlay)
-                Log.d("DLNA", "本地投屏成功: $success")
-            }
+        DLNACast.castLocalFile(video.path, tv, video.title)
+    } catch (e: UPnPException.FileError) {
+        Log.e("DLNA", "无法读取 ${video.path}")
+    } catch (e: UPnPException.NetworkError) {
+        Log.e("DLNA", "文件服务器启动失败")
+    } catch (e: UPnPException.DeviceError) {
+        Log.e("DLNA", "设备拒绝了投屏请求")
+    }
+}
+```
+
+### 进度监控
+
+```kotlin
+lifecycleScope.launch {
+    while (isActive) {
+        DLNACast.getProgress()?.let { (currentMs, totalMs) ->
+            progressBar.progress = if (totalMs > 0) (currentMs * 100 / totalMs).toInt() else 0
         }
-    } catch (e: Exception) {
-        Log.e("DLNA", "本地投屏失败: ${e.message}")
+        delay(1000)
     }
 }
 ```
 
-### 媒体控制和状态监控
+需要立即获取最新值时（如拖拽后）使用 `getProgressRealtime()`。在同一设备上切换媒体后，调用 `DLNACast.clearProgressCache()` 清除旧的进度缓存。
+
+### 响应远端状态变化
+
 ```kotlin
+// 用户用电视遥控器暂停了播放
 lifecycleScope.launch {
-    try {
-        // 控制播放
-        DLNACast.control(DLNACast.MediaAction.PAUSE)
-        
-        // 监控状态
-        val state = DLNACast.getState()
-        Log.d("DLNA", "设备: ${state.currentDevice?.name}")
-        Log.d("DLNA", "播放中: ${state.isPlaying}")
-        Log.d("DLNA", "音量: ${state.volume}")
-        
-        // 获取进度
-        val progress = DLNACast.getProgress()
-        Log.d("DLNA", "进度: ${progress.percentage * 100}%")
-        
-        // 跳转到指定位置（2分钟）
-        DLNACast.seek(120000)
-        
-    } catch (e: Exception) {
-        Log.e("DLNA", "控制失败: ${e.message}")
-    }
+    val state = DLNACast.getPlaybackState()
+    playButton.isVisible = state == DLNACast.PlaybackState.PAUSED
 }
 ```
-
-## 文档
-
-- 🎯 **[演示应用](app-demo/)** - 完整的示例程序，包含所有API演示
-- 📖 **[API参考](#api参考)** - 上方的完整API文档
-- 📋 **[更新日志](CHANGELOG.md)** - 版本历史和更新
-- 🤔 **[常见问题](docs/FAQ.md)** - 常见问题解答和故障排除
-- 🎯 **[最佳实践](docs/BEST_PRACTICES.md)** - 异步回调、设备管理和优化指南
 
 ## 设备兼容性
 
-- ✅ 小米电视 (原生DLNA + 小米投屏)
+- ✅ 小米电视（原生 DLNA + 小米投屏）
 - ✅ 三星智能电视
-- ✅ LG智能电视  
-- ✅ 索尼Bravia电视
-- ✅ Android TV盒子
+- ✅ LG 智能电视
+- ✅ 索尼 Bravia 电视
+- ✅ Android TV 盒子
 - ✅ Windows Media Player
 
-## 许可证
+## 文档
 
-本项目采用MIT许可证 - 详见 [LICENSE](LICENSE) 文件。
+- 🎯 **[演示应用](app-demo/)** — 完整示例程序
+- 🤔 **[常见问题](docs/FAQ.md)** — 常见问题与故障排除
+- 📋 **[更新日志](CHANGELOG.md)** — 版本历史
+- 🗺️ **[路线图](ROADMAP.md)** — 后续计划
+- 🎯 **[最佳实践](docs/BEST_PRACTICES.md)** — 协程用法与错误处理
 
 ## 贡献
 
-欢迎贡献！请查看我们的[贡献指南](CONTRIBUTING.md)了解开发指导原则和如何开始。
+欢迎贡献！请查看[贡献指南](CONTRIBUTING.md)。安全问题请参考 [SECURITY.md](SECURITY.md)。
 
-## 支持
+## 许可证
 
-- 📖 在[演示应用](app-demo/)中查看详细的使用示例
-- 🐛 在[GitHub Issues](https://github.com/yinnho/UPnPCast/issues)报告问题
-- 💡 欢迎功能请求！
+MIT License — 详见 [LICENSE](LICENSE)。

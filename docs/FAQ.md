@@ -1,253 +1,133 @@
-# 🤔 常见问题解答 (FAQ)
+# 常见问题解答 (FAQ)
 
-## 📋 目录
-- [设备发现问题](#设备发现问题)
-- [投屏失败问题](#投屏失败问题)
-- [网络相关问题](#网络相关问题)
-- [性能优化问题](#性能优化问题)
-- [API使用问题](#API使用问题)
-
-## 🔍 设备发现问题
+## 设备发现
 
 ### Q: 为什么搜索不到设备？
-**A:** 常见原因和解决方案：
-1. **网络权限检查**
+
+1. **手机和电视必须连接同一个 WiFi**（DLNA 仅限局域网），且路由器未开启 AP 隔离
+2. **电视的 DLNA/投屏功能已开启**：
+   - 小米电视：设置 → 账号与安全 → 投屏接收
+   - 三星电视：设置 → 常规 → 外部设备管理 → 投屏
+   - LG 电视：设置 → 网络 → Screen Share / DLNA
+3. **权限已声明**（库的 manifest 会自动合并，一般无需手动添加）：
    ```xml
    <uses-permission android:name="android.permission.INTERNET" />
-   <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+   <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
    ```
+4. **适当延长搜索时间**：部分电视响应 SSDP 较慢
+   ```kotlin
+   val devices = DLNACast.search(timeout = 10000)
+   ```
+5. **部分路由器/AP 过滤组播**：库在 `init()` 时已自动申请 `MulticastLock`；若仍收不到，可尝试更换网络热点验证
 
-2. **设备确保在同一网络**
-   - 手机和电视必须连接到相同的WiFi网络
-   - 确保路由器没有开启AP隔离功能
+### Q: 搜索结果里出现重复设备？
 
-3. **电视DLNA功能已开启**
-   - 小米电视：设置 → 账号与安全 → 投屏接收
-   - 三星电视：源 → 连接指南 → 屏幕镜像
-   - LG电视：设置 → 网络 → Screen Share
+库内部已按设备 UDN 去重。若你的业务层仍需去重：
 
-### Q: 设备列表显示重复设备怎么办？
-**A:** 
 ```kotlin
-// 使用智能去重搜索
-DLNACast.search(timeout = 15000) { devices ->
-    val uniqueDevices = devices.distinctBy { it.id }
-    // 处理去重后的设备列表
-}
+val unique = devices.distinctBy { it.id }
 ```
 
-## 📺 投屏失败问题
+### Q: 设备之前搜得到，现在搜不到了？
+
+电视休眠或 DLNA 服务重启会导致设备短暂消失。重新调用 `search()` 即可；SSDP 也会通过 NOTIFY 缓存部分设备信息。
+
+## 投屏失败
 
 ### Q: 投屏时提示"连接失败"？
-**A:** 排查步骤：
-1. **检查媒体URL可访问性**
-   ```kotlin
-   // 确保URL可访问
-   val testUrl = "http://your-server.com/video.mp4"
-   // 可以先在浏览器测试URL是否可访问
-   ```
 
-2. **使用HTTPS时的证书问题**
-   ```kotlin
-   // 对于自签名证书，可能需要设置信任
-   // 建议使用HTTP协议进行测试
-   ```
+1. **确认媒体 URL 电视可以访问** — 先在电脑浏览器打开该 URL 验证；电视与手机必须在同一网段
+2. **URL 必须是 HTTP/HTTPS 直链**，不能是网页播放页
+3. **媒体格式**：推荐 MP4 (H.264)、MP3、JPEG；专有格式或 DRM 内容普遍不被电视支持
 
-3. **媒体格式兼容性**
-   - 推荐格式：MP4 (H.264), MP3, JPEG
-   - 避免使用专有格式或DRM保护的内容
+### Q: 投屏成功但没有画面/声音？
 
-### Q: 投屏成功但没有声音？
-**A:** 
+- 检查电视端音量与静音状态：
+  ```kotlin
+  val (volume, muted) = DLNACast.getVolume() ?: return
+  if (muted == true) DLNACast.setMute(false)
+  ```
+- 用 `getPlaybackState()` 查看设备实际传输状态，部分电视会对不支持的格式直接停止：
+  ```kotlin
+  val state = DLNACast.getPlaybackState()
+  ```
+
+### Q: 本地文件投屏失败？
+
+`castLocalFile` 抛出类型化异常，按类型排查：
+
 ```kotlin
-// 检查设备音量状态
-DLNACast.control(MediaAction.GET_STATE) { success ->
-    val state = DLNACast.getState()
-    if (state.isMuted) {
-        // 取消静音
-        DLNACast.control(MediaAction.MUTE, false)
-    }
+try {
+    DLNACast.castLocalFile(filePath, device, title)
+} catch (e: UPnPException.FileError) {
+    // 文件不存在或不可读：检查路径与存储权限（Android 13+ 需要 READ_MEDIA_VIDEO）
+} catch (e: UPnPException.NetworkError) {
+    // 本地文件服务器启动失败：检查手机网络
+} catch (e: UPnPException.DeviceError) {
+    // 设备拒绝了请求：确认电视支持该格式
 }
 ```
 
-## 🌐 网络相关问题
+注意：本地投屏时电视直接从手机下载文件，**手机不能锁屏断网**，建议投屏期间保持前台服务或持有 WiFi 锁。
 
-### Q: 在移动网络下能使用吗？
-**A:** 不建议，原因：
-- DLNA协议基于局域网设计
-- 移动网络延迟较高，影响体验
-- 会消耗大量流量
+## 网络相关
 
-### Q: 支持IPv6网络吗？
-**A:** 当前版本主要支持IPv4，IPv6支持在规划中。
+### Q: 移动网络下能用吗？
 
-## ⚡ 性能优化问题
+不能。DLNA 基于局域网组播（SSDP），手机与电视必须在同一 WiFi。
 
-### Q: 如何提高设备发现速度？
-**A:** 
+### Q: 支持 IPv6 吗？
+
+当前版本以 IPv4 为主。家庭局域网内 DLNA 设备普遍仍走 IPv4，通常无影响。
+
+### Q: HTTP 明文请求被拦截？
+
+库 manifest 已设置 `usesCleartextTraffic="true"`，会自动合并。若你的应用配置了更严格的 `networkSecurityConfig`，请为媒体地址放行明文流量。
+
+## API 使用
+
+### Q: 所有方法都能在主线程调用吗？
+
+`search()`、`cast()` 等均为 `suspend` 函数，内部已切到 IO 线程执行网络操作，可直接在 `lifecycleScope.launch` 中调用，不会阻塞主线程。
+
+### Q: getProgress() 和 getProgressRealtime() 的区别？
+
+- `getProgress()`：优先返回缓存（约几秒窗口），播放中会做插值，适合 UI 轮询
+- `getProgressRealtime()`：强制向设备发一次 GetPositionInfo，适合 seek 后立即刷新
+
 ```kotlin
-// 调整搜索超时时间
-DLNACast.search(timeout = 5000) { devices ->
-    // 较短的超时时间可以更快获得结果
-    // 但可能遗漏响应较慢的设备
-}
-
-// 使用智能搜索
-DLNACast.smartCast(url, title, { success ->
-    // 自动选择最佳设备，跳过手动选择过程
-}) { devices ->
-    devices.firstOrNull { it.isTV } // 优先选择电视
-}
-```
-
-### Q: 如何避免内存泄漏？
-**A:** 
-```kotlin
-class MyActivity : AppCompatActivity() {
-    override fun onDestroy() {
-        super.onDestroy()
-        // 必须调用release释放资源
-        DLNACast.release()
-    }
-}
-```
-
-## 🔧 API使用问题
-
-### Q: 如何同步等待搜索结果？
-**A:** 
-```kotlin
-// 方案1：使用协程
-suspend fun searchDevicesSync(): List<Device> {
-    return suspendCoroutine { continuation ->
-        DLNACast.search { devices ->
-            continuation.resume(devices)
+// 进度条每秒刷新
+lifecycleScope.launch {
+    while (isActive) {
+        DLNACast.getProgress()?.let { (currentMs, totalMs) ->
+            updateProgressBar(currentMs, totalMs)
         }
+        delay(1000)
     }
-}
-
-// 方案2：使用CountDownLatch
-fun searchDevicesBlocking(): List<Device> {
-    val latch = CountDownLatch(1)
-    var result: List<Device> = emptyList()
-    
-    DLNACast.search { devices ->
-        result = devices
-        latch.countDown()
-    }
-    
-    latch.await(10, TimeUnit.SECONDS)
-    return result
 }
 ```
 
-### Q: 如何实现批量设备操作？
-**A:** 
+### Q: 用户用电视遥控器暂停了，怎么感知？
+
+`getState()` 返回的是最近一次观测到的状态；要主动查询设备实时状态用 `getPlaybackState()`：
+
 ```kotlin
-// 同时投屏到多个设备
-fun castToMultipleDevices(url: String, devices: List<Device>) {
-    devices.forEach { device ->
-        DLNACast.castToDevice(device, url) { success ->
-            Log.d("DLNA", "设备 ${device.name}: $success")
-        }
+lifecycleScope.launch {
+    when (DLNACast.getPlaybackState()) {
+        DLNACast.PlaybackState.PAUSED -> showPlayButton()
+        DLNACast.PlaybackState.PLAYING -> showPauseButton()
+        else -> {}
     }
 }
 ```
 
-### Q: 如何实现播放进度监控？
-**A:** 
-```kotlin
-// 方案1：使用新的播放进度API (推荐)
-DLNACast.getProgress { currentMs, totalMs, success ->
-    if (success) {
-        val progressPercent = if (totalMs > 0) (currentMs * 100 / totalMs) else 0
-        Log.d("DLNA", "播放进度: $progressPercent% (${currentMs}ms / ${totalMs}ms)")
-        
-        // 更新UI进度条
-        updateProgressBar(currentMs, totalMs)
-    }
-}
+### Q: 同一设备切换视频后进度不对？
 
-// 方案2：定期获取播放进度
-private fun startProgressMonitoring() {
-    val handler = Handler(Looper.getMainLooper())
-    val runnable = object : Runnable {
-        override fun run() {
-            DLNACast.getProgress { currentMs, totalMs, success ->
-                if (success) {
-                    // 更新UI显示进度
-                    updateProgress(currentMs, totalMs)
-                }
-            }
-            handler.postDelayed(this, 1000) // 每秒查询一次
-        }
-    }
-    handler.post(runnable)
-}
+切换媒体后调用 `DLNACast.clearProgressCache()` 清除旧进度缓存。
 
-// 方案3：结合SeekBar实现可拖拽的进度条
-private fun setupSeekBar() {
-    seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-        override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-            if (fromUser && totalDuration > 0) {
-                val targetPosition = (progress * totalDuration / 100).toLong()
-                DLNACast.control(DLNACast.MediaAction.SEEK, targetPosition) { success ->
-                    Log.d("DLNA", "跳转到 ${targetPosition}ms: $success")
-                }
-            }
-        }
-        
-        override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-        override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-    })
-}
-```
+## 更多帮助
 
-## 🐛 错误处理最佳实践
-
-### Q: 如何处理网络超时？
-**A:** 
-```kotlin
-DLNACast.search(timeout = 10000) { devices ->
-    if (devices.isEmpty()) {
-        // 处理没有发现设备的情况
-        showErrorMessage("未发现可用设备，请检查网络连接")
-    } else {
-        // 正常处理设备列表
-    }
-}
-```
-
-### Q: 如何实现重试机制？
-**A:** 
-```kotlin
-fun castWithRetry(url: String, maxRetries: Int = 3) {
-    var attempts = 0
-    
-    fun attemptCast() {
-        DLNACast.cast(url) { success ->
-            if (success) {
-                // 投屏成功
-                onCastSuccess()
-            } else if (++attempts < maxRetries) {
-                // 重试
-                Handler().postDelayed({ attemptCast() }, 2000)
-            } else {
-                // 最终失败
-                onCastFailed("投屏失败，已重试 $maxRetries 次")
-            }
-        }
-    }
-    
-    attemptCast()
-}
-```
-
-## 💡 更多问题？
-
-如果你遇到其他问题：
-1. 📖 查看[完整API文档](API.md)
-2. 🎯 参考[Demo应用](../app-demo/)  
-3. 🐛 在[GitHub Issues](https://github.com/yinnho/UPnPCast/issues)提交问题
-4. 💬 加入技术交流群获得支持 
+1. 参考 [Demo 应用](../app-demo/)
+2. 查看 [最佳实践](BEST_PRACTICES.md)
+3. 在 [GitHub Issues](https://github.com/yinnho/UPnPCast/issues) 提问

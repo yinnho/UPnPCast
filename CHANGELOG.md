@@ -5,6 +5,14 @@ All notable changes to the UPnPCast library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### 📝 Documentation
+- README / README_zh rewritten against the current v1.3.0 API (previously documented v1.1.2 callback-era examples that no longer compile); FAQ and Best Practices guides rewritten with working coroutine examples; stale RELEASE_NOTES removed; POM description de-spammed. Installation now points to JitPack only — Maven Central carries legacy 1.1.2 and nothing newer
+
+### 🔧 Changed
+- POM `description` replaced with a factual one-line summary
+
 ## [1.3.0] - 2026-09-02
 
 ### ✨ Added
