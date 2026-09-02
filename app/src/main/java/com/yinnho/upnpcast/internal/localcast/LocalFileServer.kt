@@ -7,7 +7,6 @@ import fi.iki.elonen.NanoHTTPD
 import java.io.File
 import java.io.FileInputStream
 import java.lang.ref.WeakReference
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
 
 /**
@@ -30,7 +29,24 @@ internal class LocalFileServer private constructor(
         
         @Volatile
         private var instance: LocalFileServer? = null
-        private val fileRegistry = ConcurrentHashMap<String, String>() // token -> filePath
+        private const val MAX_REGISTRY_ENTRIES = 64
+
+        // token -> filePath, LRU-bounded: every cast generates a new token
+        // and an unbounded map would grow for the process lifetime
+        private val fileRegistry = object : LinkedHashMap<String, String>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean {
+                return size > MAX_REGISTRY_ENTRIES
+            }
+        }
+
+        private fun putToken(token: String, filePath: String) =
+            synchronized(fileRegistry) { fileRegistry[token] = filePath }
+
+        private fun takeToken(token: String): String? =
+            synchronized(fileRegistry) { fileRegistry[token] }
+
+        private fun removeToken(token: String) =
+            synchronized(fileRegistry) { fileRegistry.remove(token) }
         
         /**
          * Get server instance (singleton)
@@ -69,7 +85,7 @@ internal class LocalFileServer private constructor(
                 val server = getInstance(context)
                 
                 val token = generateToken()
-                fileRegistry[token] = filePath
+                putToken(token, filePath)
                 
                 val serverAddress = getLocalIpAddress()
                 "http://$serverAddress:${server.listeningPort}/file/$token"
@@ -86,7 +102,7 @@ internal class LocalFileServer private constructor(
             try {
                 instance?.stop()
                 instance = null
-                fileRegistry.clear()
+                synchronized(fileRegistry) { fileRegistry.clear() }
                 Log.i(TAG, "Local file server stopped and resources released")
             } catch (e: Exception) {
                 Log.e(TAG, "Error releasing server: ${e.message}")
@@ -139,7 +155,7 @@ internal class LocalFileServer private constructor(
         val uri = session.uri
         val token = uri.substring("/file/".length)
         
-        val filePath = fileRegistry[token]
+        val filePath = takeToken(token)
         if (filePath == null) {
             Log.w(TAG, "Invalid token: $token")
             return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "File not found")
@@ -148,7 +164,7 @@ internal class LocalFileServer private constructor(
         val file = File(filePath)
         if (!file.exists() || !file.isFile) {
             Log.w(TAG, "File not found: $filePath")
-            fileRegistry.remove(token)
+            removeToken(token)
             return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "File not found")
         }
         
@@ -167,7 +183,7 @@ internal class LocalFileServer private constructor(
         val fileSize = file.length()
         var rangeStart = 0L
         var rangeEnd = fileSize - 1
-        
+
         val rangeHeader = session.headers["range"]
         if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
             try {
@@ -179,11 +195,11 @@ internal class LocalFileServer private constructor(
                 if (parts.size > 1 && parts[1].isNotEmpty()) {
                     rangeEnd = parts[1].toLong()
                 }
-                
+
                 // Ensure range is valid
                 rangeStart = rangeStart.coerceAtLeast(0)
                 rangeEnd = rangeEnd.coerceAtMost(fileSize - 1)
-                
+
                 if (rangeStart > rangeEnd) {
                     return newFixedLengthResponse(
                         Response.Status.RANGE_NOT_SATISFIABLE,
@@ -195,40 +211,64 @@ internal class LocalFileServer private constructor(
                 Log.w(TAG, "Invalid range header: $rangeHeader")
             }
         }
-        
+
         val contentLength = rangeEnd - rangeStart + 1
         val inputStream = FileInputStream(file)
-        inputStream.skip(rangeStart)
-        
+        // skip() may skip fewer bytes than requested; loop until the
+        // requested offset is reached or EOF, otherwise the stream starts
+        // at the wrong position and the TV receives a corrupt stream
+        var remaining = rangeStart
+        while (remaining > 0) {
+            val skipped = inputStream.skip(remaining)
+            if (skipped <= 0) break
+            remaining -= skipped
+        }
+
         val response = newFixedLengthResponse(
             if (rangeHeader != null) Response.Status.PARTIAL_CONTENT else Response.Status.OK,
-            getMimeType(),
+            getMimeType(file.name),
             inputStream,
             contentLength
         )
-        
+
         // Add necessary response headers
         response.addHeader("Accept-Ranges", "bytes")
         response.addHeader("Content-Length", contentLength.toString())
-        
+
         if (rangeHeader != null) {
             response.addHeader("Content-Range", "bytes $rangeStart-$rangeEnd/$fileSize")
         }
-        
+
         // Add CORS headers support
         response.addHeader("Access-Control-Allow-Origin", "*")
         response.addHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
         response.addHeader("Access-Control-Allow-Headers", "Range")
-        
+
         Log.d(TAG, "Serving file: ${file.name}, range: $rangeStart-$rangeEnd/$fileSize")
         return response
     }
-    
+
     /**
-     * Get MIME type - use application/octet-stream for best compatibility
+     * Resolve MIME type from the file extension; some TVs reject or
+     * mis-handle unknown content types.
      */
-    private fun getMimeType(): String {
-        // According to documentation, use application/octet-stream for TV device compatibility
-        return "application/octet-stream"
+    private fun getMimeType(fileName: String): String {
+        val extension = fileName.substringAfterLast('.', "").lowercase()
+        return when (extension) {
+            "mp4", "m4v" -> "video/mp4"
+            "mkv", "webm" -> "video/x-matroska"
+            "avi" -> "video/x-msvideo"
+            "mov" -> "video/quicktime"
+            "ts", "m2ts" -> "video/mp2t"
+            "flv" -> "video/x-flv"
+            "3gp" -> "video/3gpp"
+            "mp3" -> "audio/mpeg"
+            "flac" -> "audio/flac"
+            "aac", "m4a" -> "audio/mp4"
+            "wav" -> "audio/x-wav"
+            "ogg", "oga" -> "audio/ogg"
+            "srt" -> "text/srt"
+            else -> "application/octet-stream"
+        }
     }
-} 
+}

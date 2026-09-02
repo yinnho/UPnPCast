@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`search()` semantics**: returns the complete device list after the timeout instead of resolving as soon as the first device responds
 - **Progress interpolation**: only advances while the transport state is `PLAYING` (previously any media with a known duration was treated as playing)
 - **Cache isolation**: switching devices drops all cached volume/progress state; casting new media on the same device resets the progress cache
+- **Local file server**: serve correct MIME types by file extension (some TVs reject `application/octet-stream`) and skip reliably to the requested Range offset (`InputStream.skip` may under-skip, corrupting seeked streams); bound the token registry (LRU, 64 entries) so repeated casts no longer leak entries
 
 ### 🔧 Changed
 - `DeviceDescriptionParser` is now `internal` (was accidentally public)
