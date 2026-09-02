@@ -5,7 +5,7 @@ All notable changes to the UPnPCast library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.2.0] - 2026-09-02
 
 ### ✨ Added
 - **Live playback state**: `DLNACast.getPlaybackState()` queries the device via GetTransportInfo, so remote pauses/stops are reflected; `getState()` now reports the last observed transport state instead of always `PLAYING` while connected
