@@ -32,9 +32,13 @@ android {
 
     // Test configuration
     testOptions {
-        unitTests.all {
-            it.enabled = true
-            it.useJUnitPlatform()
+        unitTests {
+            // Library code logs through android.util.Log; unit tests only
+            // need the calls to be no-ops
+            isReturnDefaultValues = true
+            all {
+                it.useJUnitPlatform()
+            }
         }
     }
     
