@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unit tests**: the project's first test suite (69 tests) covers DLNA time parsing/formatting, SOAP XML value extraction (position/volume/mute), DIDL-Lite metadata construction (MIME/class detection, XML escaping, subtitle resources, verbatim override), MIME type mapping and SSDP header parsing — making the CI `test` step meaningful
 
 ### 🔧 Changed
+- **Typed `RemoteDevice`**: the `Map<String, Any>` `details` bag is replaced by typed fields — `locationUrl` and `services: List<ServiceInfo>` (`ServiceInfo` is now a top-level class); service URL resolution and TV detection read typed fields instead of unchecked casts
+- **Unified HTTP layer**: device description retrieval and SOAP control requests go through one internal `UpnpHttp` executor (consistent timeouts, User-Agent, connection handling); the description fetch keeps its 3-attempt linear backoff
 - Pure logic extracted from `DlnaMediaController`, `LocalFileServer` and `SsdpDeviceDiscovery` into internal helpers (`UpnpTime`, `SoapXml`, `MetadataBuilder`, `MimeTypes`, `SsdpHeaders`) with no behavior change
 
 ## [1.2.0] - 2026-09-02
