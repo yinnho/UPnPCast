@@ -306,6 +306,24 @@ internal class DlnaMediaController(private val device: RemoteDevice) {
         needResponse = true,
         parser = ::parsePositionInfo
     )
+
+    /**
+     * Get transport state: PLAYING, PAUSED_PLAYBACK, STOPPED,
+     * TRANSITIONING or NO_MEDIA_PRESENT
+     */
+    suspend fun getTransportInfo(): String? = executeServiceAction(
+        serviceType = "AVTransport",
+        serviceNamespace = "urn:schemas-upnp-org:service:AVTransport:1",
+        defaultPath = "AVTransport/control",
+        action = "GetTransportInfo",
+        body = """
+            <u:GetTransportInfo xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
+                <InstanceID>0</InstanceID>
+            </u:GetTransportInfo>
+        """.trimIndent(),
+        needResponse = true,
+        parser = { response -> parseXmlValue(response, "CurrentTransportState") { it.trim() } }
+    )
     
     /**
      * Parse playback position information

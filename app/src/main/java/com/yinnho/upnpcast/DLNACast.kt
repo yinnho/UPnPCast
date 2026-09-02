@@ -118,9 +118,20 @@ object DLNACast {
     
     /**
      * Search for DLNA devices
+     *
+     * Returns the complete list of devices found within [timeout]; does not
+     * resolve early when the first device appears.
      */
-    suspend fun search(timeout: Long = 5000): List<Device> = 
-        suspendOnce { callback -> CoreManager.search(timeout, callback) }
+    suspend fun search(timeout: Long = 5000): List<Device> =
+        suspendCancellableCoroutine { cont ->
+            var resumed = false
+            CoreManager.search(timeout) { devices, complete ->
+                if (complete && !resumed) {
+                    resumed = true
+                    cont.resume(devices)
+                }
+            }
+        }
     
     /**
      * Cast media to best available device
@@ -142,8 +153,14 @@ object DLNACast {
     /**
      * Get current playback progress
      */
-    suspend fun getProgress(): Pair<Long, Long>? = 
+    suspend fun getProgress(): Pair<Long, Long>? =
         suspendWithTriple { callback -> CoreManager.getProgress(callback) }
+
+    /**
+     * Query the live playback state from the connected device
+     * (GetTransportInfo; reflects pause/stop on the device side)
+     */
+    suspend fun getPlaybackState(): PlaybackState = CoreManager.getPlaybackState()
     
     /**
      * Get volume information
