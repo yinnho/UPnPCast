@@ -86,12 +86,6 @@ dependencies {
     // 添加RecyclerView支持，用于本地视频选择器
     implementation(libs.androidx.recyclerview)
     
-    // Network related
-    implementation(libs.okhttp)
-    
-    // JSON parsing
-    implementation(libs.gson)
-    
     // Local file server for local casting
     implementation(libs.nanohttpd)
     

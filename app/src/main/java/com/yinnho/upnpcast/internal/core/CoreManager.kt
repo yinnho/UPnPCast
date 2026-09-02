@@ -1,6 +1,7 @@
 package com.yinnho.upnpcast.internal.core
 
 import android.content.Context
+import android.net.wifi.WifiManager
 import android.util.Log
 import com.yinnho.upnpcast.DLNACast.Device
 
@@ -29,10 +30,11 @@ internal class CoreManager {
     companion object {
         private const val TAG = "CoreManager"
         
-        private val cacheManager = CacheManager(ScopeManager.appScope)
-        
+        private var cacheManager = CacheManager(ScopeManager.appScope)
+
         private val devices = ConcurrentHashMap<String, RemoteDevice>()
         private var ssdpDiscovery: SsdpDeviceDiscovery? = null
+        private var multicastLock: WifiManager.MulticastLock? = null
         @Volatile
         private var currentDevice: RemoteDevice? = null
         private var contextRef: WeakReference<Context>? = null
@@ -52,13 +54,44 @@ internal class CoreManager {
          * Initialize core manager with application context
          */
         fun init(context: Context) {
-            contextRef = WeakReference(context.applicationContext)
+            val appContext = context.applicationContext
+            contextRef = WeakReference(appContext)
+            acquireMulticastLock(appContext)
+            // Bind the cache manager to the current scopes so a full
+            // cleanup() -> init() cycle never leaves it on a cancelled scope
+            cacheManager = CacheManager(ScopeManager.appScope)
             ssdpDiscovery = SsdpDeviceDiscovery(
                 onDeviceFound = { device ->
                     addDevice(device)
                 }
             )
             Log.i(TAG, "CoreManager initialized")
+        }
+
+        /**
+         * Hold a multicast lock while active: Android Wi-Fi stacks filter
+         * multicast traffic by default, which silently drops SSDP NOTIFY
+         * messages and M-SEARCH responses routed as multicast.
+         */
+        private fun acquireMulticastLock(context: Context) {
+            releaseMulticastLock()
+            val wifi = context.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: run {
+                Log.w(TAG, "WifiManager unavailable, multicast reception may be filtered")
+                return
+            }
+            multicastLock = wifi.createMulticastLock("UPnPCast").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        }
+
+        private fun releaseMulticastLock() {
+            try {
+                multicastLock?.takeIf { it.isHeld }?.release()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to release multicast lock: ${e.message}")
+            }
+            multicastLock = null
         }
         
         /**
@@ -324,6 +357,7 @@ internal class CoreManager {
             
             ssdpDiscovery?.shutdown()
             ssdpDiscovery = null
+            releaseMulticastLock()
             devices.clear()
             currentDevice = null
             contextRef = null

@@ -87,7 +87,8 @@ internal class DlnaMediaController(private val device: RemoteDevice) {
                                 val location = device.details["location"] as? String
                                 if (location != null) {
                                     val url = java.net.URL(location)
-                                    val baseUrl = "http://${device.address}:${url.port}"
+                                    val port = url.port.takeIf { it > 0 } ?: 80
+                                    val baseUrl = "http://${device.address}:$port"
                                     controlUrl = if (controlUrl.startsWith("/")) {
                                         "$baseUrl$controlUrl"
                                     } else {
@@ -105,14 +106,14 @@ internal class DlnaMediaController(private val device: RemoteDevice) {
             val port = if (location != null) {
                 try {
                     val url = java.net.URL(location)
-                    url.port
+                    url.port.takeIf { it > 0 } ?: 80
                 } catch (e: Exception) {
                     return null
                 }
             } else {
                 return null
             }
-            
+
             "http://${device.address}:$port/$defaultPath"
         } catch (e: Exception) {
             null

@@ -12,14 +12,6 @@
         android:allowBackup="true"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
-        tools:targetApi="31">
-        
-        <!-- 库内置的本地视频选择器 -->
-        <activity 
-            android:name=".internal.VideoSelectorActivity"
-            android:exported="false"
-            android:theme="@style/Theme.AppCompat.Light" />
-            
-    </application>
+        tools:targetApi="31" />
 
 </manifest>

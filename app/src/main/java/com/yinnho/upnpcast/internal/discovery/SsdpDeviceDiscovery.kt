@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import java.net.BindException
 import java.net.DatagramPacket
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -46,6 +47,7 @@ internal class SsdpDeviceDiscovery(
     }
 
     private val isShutdown = AtomicBoolean(false)
+    private val isListening = AtomicBoolean(false)
     private var socket: MulticastSocket? = null
     private val multicastGroup by lazy { InetSocketAddress(MULTICAST_ADDRESS, MULTICAST_PORT) }
     private val descriptionParser = DeviceDescriptionParser()
@@ -60,18 +62,34 @@ internal class SsdpDeviceDiscovery(
 
     /**
      * Initialize Socket
+     *
+     * reuseAddress must be set before binding. Prefer port 1900 so that
+     * multicast NOTIFY messages can be received; fall back to an ephemeral
+     * port when 1900 is held by another process (unicast M-SEARCH responses
+     * still reach an ephemeral source port).
      */
     private fun initializeSocket() {
         if (socket != null) return
-        
+
+        val newSocket = MulticastSocket(null)
         try {
-            socket = MulticastSocket(MULTICAST_PORT).apply {
-                reuseAddress = true
-                timeToLive = 4
-                joinGroup(multicastGroup, null)
+            newSocket.reuseAddress = true
+            try {
+                newSocket.bind(InetSocketAddress(MULTICAST_PORT))
+            } catch (e: BindException) {
+                Log.w(tag, "Port $MULTICAST_PORT unavailable, binding ephemeral port (NOTIFY reception disabled)")
+                newSocket.bind(InetSocketAddress(0))
             }
+            newSocket.timeToLive = 4
+            newSocket.joinGroup(multicastGroup, null)
+            socket = newSocket
         } catch (e: Exception) {
             Log.e(tag, "Failed to initialize socket", e)
+            try {
+                newSocket.close()
+            } catch (ignore: Exception) {
+                // Socket already closed
+            }
         }
     }
 
@@ -97,17 +115,21 @@ internal class SsdpDeviceDiscovery(
 
     /**
      * Start SSDP device discovery
+     *
+     * The listener runs on its own daemon thread and is started before the
+     * M-SEARCH requests are sent, so no response can arrive while nobody is
+     * listening, and repeated searches never queue behind the listener loop.
      */
     fun startSearch() {
         if (isShutdown.get()) return
 
         initializeSocket()
+        startResponseListener()
 
         executor.execute {
             SEARCH_TARGETS.forEach { target ->
                 sendSearchRequest(target)
             }
-            startResponseListener()
         }
     }
 
@@ -116,7 +138,7 @@ internal class SsdpDeviceDiscovery(
      */
     private fun sendSearchRequest(target: String) {
         if (isShutdown.get()) return
-        
+
         try {
             val message = """
                 M-SEARCH * HTTP/1.1
@@ -125,9 +147,9 @@ internal class SsdpDeviceDiscovery(
                 MX: 3
                 ST: $target
                 USER-AGENT: UPnPCast/1.0
-                
+
             """.trimIndent()
-            
+
             val bytes = message.toByteArray(Charsets.UTF_8)
             val packet = DatagramPacket(
                 bytes,
@@ -135,7 +157,7 @@ internal class SsdpDeviceDiscovery(
                 InetAddress.getByName(MULTICAST_ADDRESS),
                 MULTICAST_PORT
             )
-            
+
             socket?.send(packet)
         } catch (e: Exception) {
             Log.e(tag, "Failed to send search request: $target", e)
@@ -143,30 +165,40 @@ internal class SsdpDeviceDiscovery(
     }
 
     /**
-     * Start response listener
+     * Start response listener on a dedicated daemon thread
+     *
+     * Read timeouts are expected while waiting for packets and must not
+     * terminate the loop; it exits only on shutdown or a real socket error.
      */
     private fun startResponseListener() {
         if (isShutdown.get()) return
-        
-        executor.execute {
+        if (!isListening.compareAndSet(false, true)) return
+
+        val listener = Thread({
             try {
                 val buffer = ByteArray(4096)
                 val packet = DatagramPacket(buffer, buffer.size)
-                
+
                 socket?.soTimeout = SOCKET_TIMEOUT_MS
-                
+
                 while (!isShutdown.get()) {
                     try {
                         socket?.receive(packet)
                         processResponse(packet)
+                    } catch (e: java.net.SocketTimeoutException) {
+                        // Expected between packets; keep listening
                     } catch (e: Exception) {
                         break
                     }
                 }
             } catch (e: Exception) {
                 Log.e(tag, "Response listener failed", e)
+            } finally {
+                isListening.set(false)
             }
-        }
+        }, "SSDP-Listener")
+        listener.isDaemon = true
+        listener.start()
     }
 
     /**
